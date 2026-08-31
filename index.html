@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuperList - Tu Lista de Compras Inteligente</title>
+  <meta name="description" content="Gestiona tu lista de compras del supermercado fácilmente con un diseño moderno, categorías y modal interactivo.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app-background">
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+  </div>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <span>🛒</span>
+        </div>
+        <div>
+          <h1>SuperList</h1>
+          <p class="subtitle">Organiza tus compras de supermercado fácilmente</p>
+        </div>
+      </div>
+      <button id="open-modal-btn" class="btn btn-primary btn-glow" aria-haspopup="dialog">
+        <span class="btn-icon">➕</span>
+        <span>Agregar Producto</span>
+      </button>
+    </header>
+
+    <!-- Progress & Stats Section -->
+    <section class="stats-card">
+      <div class="stats-header">
+        <div>
+          <span class="stats-label">Progreso de Compras</span>
+          <h2 id="progress-text" class="progress-number">0 / 0 completados</h2>
+        </div>
+        <div class="stats-percentage-pill" id="percentage-pill">0%</div>
+      </div>
+      <div class="progress-bar-container">
+        <div id="progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <span class="stat-val" id="total-count">0</span>
+          <span class="stat-desc">Total Items</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-val stat-pending" id="pending-count">0</span>
+          <span class="stat-desc">Pendientes</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-val stat-done" id="completed-count">0</span>
+          <span class="stat-desc">En Carrito</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Controls: Search & Filters -->
+    <section class="controls-section">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search-input" placeholder="Buscar producto en la lista..." autocomplete="off">
+        <button id="clear-search-btn" class="btn-icon-only hidden" title="Limpiar búsqueda">✕</button>
+      </div>
+
+      <div class="filters-wrapper">
+        <div class="filter-tabs" role="tablist">
+          <button class="filter-tab active" data-filter="all">Todos</button>
+          <button class="filter-tab" data-filter="pending">Pendientes</button>
+          <button class="filter-tab" data-filter="completed">Comprados</button>
+        </div>
+
+        <div class="category-select-wrapper">
+          <select id="category-filter" aria-label="Filtrar por categoría">
+            <option value="all">Todas las categorías</option>
+            <option value="frutas">🍎 Frutas y Verduras</option>
+            <option value="lacteos">🥛 Lácteos y Huevos</option>
+            <option value="carnes">🥩 Carnes y Pescados</option>
+            <option value="panaderia">🍞 Panadería y Cereales</option>
+            <option value="despensa">🥫 Despensa y Abarrotes</option>
+            <option value="bebidas">🧃 Bebidas y Jugos</option>
+            <option value="limpieza">🧼 Limpieza del Hogar</option>
+            <option value="higiene">🧴 Cuidado Personal</option>
+            <option value="snacks">🍫 Snacks y Dulces</option>
+            <option value="otros">📦 Otros</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Shopping List -->
+    <main class="list-section">
+      <div class="list-header">
+        <h3 id="list-title">Productos en lista (<span id="visible-count">0</span>)</h3>
+        <div class="list-actions">
+          <button id="copy-list-btn" class="btn btn-secondary btn-sm" title="Copiar lista de compras">
+            <span>📋</span> Copiar lista
+          </button>
+          <button id="clear-completed-btn" class="btn btn-secondary btn-sm" title="Eliminar los productos ya comprados">
+            <span>🧹</span> Limpiar comprados
+          </button>
+        </div>
+      </div>
+
+      <ul id="shopping-list" class="shopping-list" aria-live="polite">
+        <!-- Dynamic items will be injected here -->
+      </ul>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="empty-state hidden">
+        <div class="empty-icon">🛒</div>
+        <h4>¡Tu lista está vacía!</h4>
+        <p>Presiona el botón "Agregar Producto" para comenzar a planificar tus compras.</p>
+        <button id="empty-add-btn" class="btn btn-primary mt-3">
+          <span>➕</span> Agregar primer producto
+        </button>
+      </div>
+
+      <!-- No search results state -->
+      <div id="no-results-state" class="empty-state hidden">
+        <div class="empty-icon">🔎</div>
+        <h4>No se encontraron productos</h4>
+        <p>Intenta con otro término de búsqueda o cambia los filtros seleccionados.</p>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>💡 <em>Tip: Haz clic en un producto para marcarlo como comprado.</em></p>
+    </footer>
+  </div>
+
+  <!-- Modal Component -->
+  <div id="modal-overlay" class="modal-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-header-title">
+          <span class="modal-badge-icon">🛍️</span>
+          <h3 id="modal-title">Agregar a la Lista</h3>
+        </div>
+        <button id="close-modal-btn" class="modal-close-btn" aria-label="Cerrar modal">✕</button>
+      </div>
+
+      <form id="add-product-form" class="modal-form" novalidate>
+        <div class="form-group">
+          <label for="product-name">Nombre del producto <span class="required">*</span></label>
+          <input 
+            type="text" 
+            id="product-name" 
+            placeholder="Ej: Leche deslactosada, Manzanas rojas..." 
+            required 
+            autocomplete="off"
+            maxlength="60"
+          >
+          <span class="form-error" id="name-error">Por favor ingresa el nombre del producto</span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="product-category">Categoría</label>
+            <select id="product-category">
+              <option value="frutas">🍎 Frutas y Verduras</option>
+              <option value="lacteos" selected>🥛 Lácteos y Huevos</option>
+              <option value="carnes">🥩 Carnes y Pescados</option>
+              <option value="panaderia">🍞 Panadería y Cereales</option>
+              <option value="despensa">🥫 Despensa</option>
+              <option value="bebidas">🧃 Bebidas</option>
+              <option value="limpieza">🧼 Limpieza</option>
+              <option value="higiene">🧴 Cuidado Personal</option>
+              <option value="snacks">🍫 Snacks y Dulces</option>
+              <option value="otros">📦 Otros</option>
+            </select>
+          </div>
+
+          <div class="form-group flex-1">
+            <label for="product-qty">Cantidad / Unidad</label>
+            <div class="qty-input-group">
+              <input 
+                type="text" 
+                id="product-qty" 
+                placeholder="Ej: 2 un, 1 kg, 500g" 
+                value="1 un"
+                maxlength="20"
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="product-note">Nota o marca (Opcional)</label>
+          <input 
+            type="text" 
+            id="product-note" 
+            placeholder="Ej: Marca La Serenísima, que estén maduros..." 
+            maxlength="80"
+          >
+        </div>
+
+        <div class="quick-suggestions">
+          <span class="quick-label">Sugerencias rápidas:</span>
+          <div class="tags-container">
+            <button type="button" class="tag-btn" data-name="Leche" data-cat="lacteos" data-qty="1 L">🥛 Leche</button>
+            <button type="button" class="tag-btn" data-name="Huevos" data-cat="lacteos" data-qty="1 docena">🥚 Huevos</button>
+            <button type="button" class="tag-btn" data-name="Pan" data-cat="panaderia" data-qty="1 bolsa">🍞 Pan</button>
+            <button type="button" class="tag-btn" data-name="Manzanas" data-cat="frutas" data-qty="1 kg">🍎 Manzanas</button>
+            <button type="button" class="tag-btn" data-name="Café" data-cat="despensa" data-qty="1 frasco">☕ Café</button>
+            <button type="button" class="tag-btn" data-name="Arroz" data-cat="despensa" data-qty="1 kg">🍚 Arroz</button>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" id="cancel-modal-btn" class="btn btn-secondary">Cancelar</button>
+          <button type="submit" class="btn btn-primary btn-glow">
+            <span>➕</span> Agregar a la lista
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
