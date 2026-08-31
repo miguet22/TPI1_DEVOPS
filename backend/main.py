@@ -5,6 +5,7 @@ import uuid
 from typing import List, Optional
 
 import redis
+import fakeredis
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -21,25 +22,53 @@ app = FastAPI(
 # Configuración de CORS para permitir peticiones desde la App Web (Frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite cualquier origen en desarrollo
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Conexión a Redis (configurable por variables de entorno)
+# Configuración de Redis
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_KEY_ITEMS = "superlist:items"
 
+# Instancia global de Redis (con soporte para fallback en memoria si no hay Redis levantado)
+_redis_client = None
+_redis_mode = "unknown"
+
 def get_redis_client():
-    """Retorna una instancia del cliente de Redis."""
-    return redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        decode_responses=True,
-        socket_connect_timeout=3
-    )
+    """
+    Retorna la instancia de cliente de Redis.
+    1. Intenta conectarse a un servidor Redis real en REDIS_HOST:REDIS_PORT.
+    2. Si no hay un servidor Redis activo, utiliza una instancia de Redis en memoria (fakeredis)
+       para permitir pruebas locales inmediatas sin Docker.
+    """
+    global _redis_client, _redis_mode
+
+    if _redis_client is not None:
+        return _redis_client
+
+    # Intentar conexión a Redis real
+    try:
+        real_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            decode_responses=True,
+            socket_connect_timeout=1
+        )
+        real_client.ping()
+        _redis_client = real_client
+        _redis_mode = f"Servidor Redis ({REDIS_HOST}:{REDIS_PORT})"
+        print(f"[*] Conectado exitosamente a {_redis_mode}")
+        return _redis_client
+    except Exception:
+        # Fallback a Redis en memoria
+        _redis_client = fakeredis.FakeRedis(decode_responses=True)
+        _redis_mode = "Redis en memoria (fakeredis - sin Docker)"
+        print(f"[*] Servidor Redis externo no detectado en {REDIS_HOST}:{REDIS_PORT}.")
+        print(f"[*] Iniciando {_redis_mode} para pruebas locales instantáneas.")
+        return _redis_client
 
 # ------------------------------------------------------------------------------
 # Modelos de Datos (Pydantic)
@@ -67,7 +96,7 @@ class Item(BaseModel):
     createdAt: int
 
 # ------------------------------------------------------------------------------
-# Datos iniciales de muestra (Semilla si Redis está vacío)
+# Datos iniciales de muestra
 # ------------------------------------------------------------------------------
 DEFAULT_SAMPLE_ITEMS = [
     {
@@ -114,165 +143,131 @@ DEFAULT_SAMPLE_ITEMS = [
 
 @app.get("/api/health", summary="Verificar estado de la API y conexión a Redis")
 def health_check():
-    """Comprueba si el backend está activo y si Redis responde."""
+    """Comprueba si el backend está activo y el estado del motor Redis."""
+    r = get_redis_client()
     try:
-        r = get_redis_client()
         is_alive = r.ping()
         return {
             "status": "online",
             "redis_connected": is_alive,
-            "redis_host": f"{REDIS_HOST}:{REDIS_PORT}"
+            "redis_mode": _redis_mode,
+            "message": "SuperList API operando correctamente con Redis."
         }
     except Exception as e:
         return {
-            "status": "warning",
+            "status": "error",
             "redis_connected": False,
-            "error": f"No se pudo conectar a Redis en {REDIS_HOST}:{REDIS_PORT}: {str(e)}"
+            "error": str(e)
         }
 
 @app.get("/api/items", response_model=List[Item], summary="Obtener todos los productos desde Redis")
 def get_all_items():
     """Recupera la lista de compras almacenada en el Hash de Redis."""
-    try:
-        r = get_redis_client()
+    r = get_redis_client()
+    raw_items = r.hgetall(REDIS_KEY_ITEMS)
+    
+    # Si Redis está vacío la primera vez, sembramos los ejemplos iniciales
+    if not raw_items:
+        for sample in DEFAULT_SAMPLE_ITEMS:
+            r.hset(REDIS_KEY_ITEMS, sample["id"], json.dumps(sample))
         raw_items = r.hgetall(REDIS_KEY_ITEMS)
-        
-        # Si Redis no tiene productos aún, sembramos los ejemplos iniciales
-        if not raw_items:
-            for sample in DEFAULT_SAMPLE_ITEMS:
-                r.hset(REDIS_KEY_ITEMS, sample["id"], json.dumps(sample))
-            raw_items = r.hgetall(REDIS_KEY_ITEMS)
 
-        items_list = []
-        for _, json_val in raw_items.items():
-            try:
-                item_data = json.loads(json_val)
-                items_list.append(item_data)
-            except json.JSONDecodeError:
-                continue
+    items_list = []
+    for _, json_val in raw_items.items():
+        try:
+            item_data = json.loads(json_val)
+            items_list.append(item_data)
+        except json.JSONDecodeError:
+            continue
 
-        # Ordenar por fecha de creación descendente (más nuevos primero)
-        items_list.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
-        return items_list
-
-    except redis.RedisError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Error de conexión con la base de datos Redis: {str(e)}"
-        )
+    # Ordenar por fecha de creación descendente (más nuevos primero)
+    items_list.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
+    return items_list
 
 @app.post("/api/items", response_model=Item, status_code=status.HTTP_201_CREATED, summary="Agregar un nuevo producto a Redis")
 def create_item(item_in: ItemCreate):
     """Crea un nuevo producto y lo almacena en caché en Redis."""
-    try:
-        r = get_redis_client()
-        item_id = f"item-{int(time.time() * 1000)}-{uuid.uuid4().hex[:5]}"
-        
-        new_item = {
-            "id": item_id,
-            "name": item_in.name.strip(),
-            "category": item_in.category,
-            "quantity": item_in.quantity.strip() if item_in.quantity else "1 un",
-            "note": item_in.note.strip() if item_in.note else "",
-            "completed": False,
-            "createdAt": int(time.time() * 1000)
-        }
+    r = get_redis_client()
+    item_id = f"item-{int(time.time() * 1000)}-{uuid.uuid4().hex[:5]}"
+    
+    new_item = {
+        "id": item_id,
+        "name": item_in.name.strip(),
+        "category": item_in.category,
+        "quantity": item_in.quantity.strip() if item_in.quantity else "1 un",
+        "note": item_in.note.strip() if item_in.note else "",
+        "completed": False,
+        "createdAt": int(time.time() * 1000)
+    }
 
-        # Guardar en Redis usando HSET (clave de hash: superlist:items)
-        r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(new_item))
-        return new_item
-
-    except redis.RedisError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Error al guardar en Redis: {str(e)}"
-        )
+    # Guardar en Redis usando HSET (clave de hash: superlist:items)
+    r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(new_item))
+    return new_item
 
 @app.put("/api/items/{item_id}", response_model=Item, summary="Actualizar producto en Redis (ej. marcar como comprado)")
 def update_item(item_id: str, item_update: ItemUpdate):
     """Modifica los atributos de un producto existente en Redis."""
-    try:
-        r = get_redis_client()
-        raw_item = r.hget(REDIS_KEY_ITEMS, item_id)
-        
-        if not raw_item:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Producto con id '{item_id}' no encontrado en Redis"
-            )
-
-        current_data = json.loads(raw_item)
-
-        # Actualizar campos modificados
-        if item_update.name is not None:
-            current_data["name"] = item_update.name.strip()
-        if item_update.category is not None:
-            current_data["category"] = item_update.category
-        if item_update.quantity is not None:
-            current_data["quantity"] = item_update.quantity.strip()
-        if item_update.note is not None:
-            current_data["note"] = item_update.note.strip()
-        if item_update.completed is not None:
-            current_data["completed"] = item_update.completed
-
-        # Guardar el producto actualizado en Redis
-        r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(current_data))
-        return current_data
-
-    except redis.RedisError as e:
+    r = get_redis_client()
+    raw_item = r.hget(REDIS_KEY_ITEMS, item_id)
+    
+    if not raw_item:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Error al actualizar en Redis: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Producto con id '{item_id}' no encontrado en Redis"
         )
+
+    current_data = json.loads(raw_item)
+
+    # Actualizar campos modificados
+    if item_update.name is not None:
+        current_data["name"] = item_update.name.strip()
+    if item_update.category is not None:
+        current_data["category"] = item_update.category
+    if item_update.quantity is not None:
+        current_data["quantity"] = item_update.quantity.strip()
+    if item_update.note is not None:
+        current_data["note"] = item_update.note.strip()
+    if item_update.completed is not None:
+        current_data["completed"] = item_update.completed
+
+    # Guardar el producto actualizado en Redis
+    r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(current_data))
+    return current_data
 
 @app.delete("/api/items/{item_id}", summary="Eliminar un producto de Redis")
 def delete_item(item_id: str):
     """Elimina un producto del Hash en Redis."""
-    try:
-        r = get_redis_client()
-        deleted_count = r.hdel(REDIS_KEY_ITEMS, item_id)
-        
-        if deleted_count == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Producto '{item_id}' no encontrado en Redis"
-            )
-
-        return {"message": f"Producto '{item_id}' eliminado exitosamente de Redis"}
-
-    except redis.RedisError as e:
+    r = get_redis_client()
+    deleted_count = r.hdel(REDIS_KEY_ITEMS, item_id)
+    
+    if deleted_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Error al eliminar de Redis: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Producto '{item_id}' no encontrado en Redis"
         )
+
+    return {"message": f"Producto '{item_id}' eliminado exitosamente de Redis"}
 
 @app.delete("/api/items/completed/clear", summary="Eliminar todos los productos comprados de Redis")
 def clear_completed_items():
     """Busca todos los productos con completed=True y los remueve de Redis."""
-    try:
-        r = get_redis_client()
-        raw_items = r.hgetall(REDIS_KEY_ITEMS)
-        
-        removed_ids = []
-        for item_id, json_val in raw_items.items():
-            try:
-                data = json.loads(json_val)
-                if data.get("completed") is True:
-                    r.hdel(REDIS_KEY_ITEMS, item_id)
-                    removed_ids.append(item_id)
-            except json.JSONDecodeError:
-                continue
+    r = get_redis_client()
+    raw_items = r.hgetall(REDIS_KEY_ITEMS)
+    
+    removed_ids = []
+    for item_id, json_val in raw_items.items():
+        try:
+            data = json.loads(json_val)
+            if data.get("completed") is True:
+                r.hdel(REDIS_KEY_ITEMS, item_id)
+                removed_ids.append(item_id)
+        except json.JSONDecodeError:
+            continue
 
-        return {
-            "message": f"Se eliminaron {len(removed_ids)} productos completados de Redis",
-            "removed_ids": removed_ids
-        }
-
-    except redis.RedisError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Error al limpiar completados en Redis: {str(e)}"
-        )
+    return {
+        "message": f"Se eliminaron {len(removed_ids)} productos completados de Redis",
+        "removed_ids": removed_ids
+    }
 
 if __name__ == "__main__":
     import uvicorn
