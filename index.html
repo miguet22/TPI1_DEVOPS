@@ -24,8 +24,14 @@
           <span>🛒</span>
         </div>
         <div>
-          <h1>SuperList</h1>
-          <p class="subtitle">Organiza tus compras de supermercado fácilmente</p>
+          <div class="brand-title-row">
+            <h1>SuperList</h1>
+            <span id="api-status-badge" class="api-badge checking" title="Verificando conexión con API y Redis">
+              <span class="status-dot"></span>
+              <span class="status-text">Conectando...</span>
+            </span>
+          </div>
+          <p class="subtitle">Organiza tus compras • FastAPI + Redis</p>
         </div>
       </div>
       <button id="open-modal-btn" class="btn btn-primary btn-glow" aria-haspopup="dialog">

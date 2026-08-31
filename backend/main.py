@@ -1,0 +1,279 @@
+import json
+import os
+import time
+import uuid
+from typing import List, Optional
+
+import redis
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+# ------------------------------------------------------------------------------
+# Configuración & Inicialización
+# ------------------------------------------------------------------------------
+app = FastAPI(
+    title="SuperList API - DevOps TP1",
+    description="API Backend en Python (FastAPI) para gestionar lista de compras y almacenar datos en Redis.",
+    version="1.0.0"
+)
+
+# Configuración de CORS para permitir peticiones desde la App Web (Frontend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permite cualquier origen en desarrollo
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Conexión a Redis (configurable por variables de entorno)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_KEY_ITEMS = "superlist:items"
+
+def get_redis_client():
+    """Retorna una instancia del cliente de Redis."""
+    return redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        decode_responses=True,
+        socket_connect_timeout=3
+    )
+
+# ------------------------------------------------------------------------------
+# Modelos de Datos (Pydantic)
+# ------------------------------------------------------------------------------
+class ItemCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, example="Leche Deslactosada")
+    category: str = Field(default="otros", example="lacteos")
+    quantity: str = Field(default="1 un", max_length=30, example="2 litros")
+    note: Optional[str] = Field(default="", max_length=150, example="Marca La Serenísima")
+
+class ItemUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=100)
+    category: Optional[str] = None
+    quantity: Optional[str] = None
+    note: Optional[str] = None
+    completed: Optional[bool] = None
+
+class Item(BaseModel):
+    id: str
+    name: str
+    category: str
+    quantity: str
+    note: str
+    completed: bool
+    createdAt: int
+
+# ------------------------------------------------------------------------------
+# Datos iniciales de muestra (Semilla si Redis está vacío)
+# ------------------------------------------------------------------------------
+DEFAULT_SAMPLE_ITEMS = [
+    {
+        "id": "item-1",
+        "name": "Leche Deslactosada",
+        "category": "lacteos",
+        "quantity": "2 litros",
+        "note": "Marca La Serenísima o similar",
+        "completed": False,
+        "createdAt": int(time.time() * 1000) - 3600000
+    },
+    {
+        "id": "item-2",
+        "name": "Manzanas Rojas",
+        "category": "frutas",
+        "quantity": "1.5 kg",
+        "note": "Que no estén golpeadas",
+        "completed": True,
+        "createdAt": int(time.time() * 1000) - 7200000
+    },
+    {
+        "id": "item-3",
+        "name": "Pan Integral de Molde",
+        "category": "panaderia",
+        "quantity": "1 paquete",
+        "note": "",
+        "completed": False,
+        "createdAt": int(time.time() * 1000) - 1800000
+    },
+    {
+        "id": "item-4",
+        "name": "Detergente para Platos",
+        "category": "limpieza",
+        "quantity": "750 ml",
+        "note": "Aroma limón",
+        "completed": False,
+        "createdAt": int(time.time() * 1000) - 900000
+    }
+]
+
+# ------------------------------------------------------------------------------
+# Endpoints de la API
+# ------------------------------------------------------------------------------
+
+@app.get("/api/health", summary="Verificar estado de la API y conexión a Redis")
+def health_check():
+    """Comprueba si el backend está activo y si Redis responde."""
+    try:
+        r = get_redis_client()
+        is_alive = r.ping()
+        return {
+            "status": "online",
+            "redis_connected": is_alive,
+            "redis_host": f"{REDIS_HOST}:{REDIS_PORT}"
+        }
+    except Exception as e:
+        return {
+            "status": "warning",
+            "redis_connected": False,
+            "error": f"No se pudo conectar a Redis en {REDIS_HOST}:{REDIS_PORT}: {str(e)}"
+        }
+
+@app.get("/api/items", response_model=List[Item], summary="Obtener todos los productos desde Redis")
+def get_all_items():
+    """Recupera la lista de compras almacenada en el Hash de Redis."""
+    try:
+        r = get_redis_client()
+        raw_items = r.hgetall(REDIS_KEY_ITEMS)
+        
+        # Si Redis no tiene productos aún, sembramos los ejemplos iniciales
+        if not raw_items:
+            for sample in DEFAULT_SAMPLE_ITEMS:
+                r.hset(REDIS_KEY_ITEMS, sample["id"], json.dumps(sample))
+            raw_items = r.hgetall(REDIS_KEY_ITEMS)
+
+        items_list = []
+        for _, json_val in raw_items.items():
+            try:
+                item_data = json.loads(json_val)
+                items_list.append(item_data)
+            except json.JSONDecodeError:
+                continue
+
+        # Ordenar por fecha de creación descendente (más nuevos primero)
+        items_list.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
+        return items_list
+
+    except redis.RedisError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error de conexión con la base de datos Redis: {str(e)}"
+        )
+
+@app.post("/api/items", response_model=Item, status_code=status.HTTP_201_CREATED, summary="Agregar un nuevo producto a Redis")
+def create_item(item_in: ItemCreate):
+    """Crea un nuevo producto y lo almacena en caché en Redis."""
+    try:
+        r = get_redis_client()
+        item_id = f"item-{int(time.time() * 1000)}-{uuid.uuid4().hex[:5]}"
+        
+        new_item = {
+            "id": item_id,
+            "name": item_in.name.strip(),
+            "category": item_in.category,
+            "quantity": item_in.quantity.strip() if item_in.quantity else "1 un",
+            "note": item_in.note.strip() if item_in.note else "",
+            "completed": False,
+            "createdAt": int(time.time() * 1000)
+        }
+
+        # Guardar en Redis usando HSET (clave de hash: superlist:items)
+        r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(new_item))
+        return new_item
+
+    except redis.RedisError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error al guardar en Redis: {str(e)}"
+        )
+
+@app.put("/api/items/{item_id}", response_model=Item, summary="Actualizar producto en Redis (ej. marcar como comprado)")
+def update_item(item_id: str, item_update: ItemUpdate):
+    """Modifica los atributos de un producto existente en Redis."""
+    try:
+        r = get_redis_client()
+        raw_item = r.hget(REDIS_KEY_ITEMS, item_id)
+        
+        if not raw_item:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto con id '{item_id}' no encontrado en Redis"
+            )
+
+        current_data = json.loads(raw_item)
+
+        # Actualizar campos modificados
+        if item_update.name is not None:
+            current_data["name"] = item_update.name.strip()
+        if item_update.category is not None:
+            current_data["category"] = item_update.category
+        if item_update.quantity is not None:
+            current_data["quantity"] = item_update.quantity.strip()
+        if item_update.note is not None:
+            current_data["note"] = item_update.note.strip()
+        if item_update.completed is not None:
+            current_data["completed"] = item_update.completed
+
+        # Guardar el producto actualizado en Redis
+        r.hset(REDIS_KEY_ITEMS, item_id, json.dumps(current_data))
+        return current_data
+
+    except redis.RedisError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error al actualizar en Redis: {str(e)}"
+        )
+
+@app.delete("/api/items/{item_id}", summary="Eliminar un producto de Redis")
+def delete_item(item_id: str):
+    """Elimina un producto del Hash en Redis."""
+    try:
+        r = get_redis_client()
+        deleted_count = r.hdel(REDIS_KEY_ITEMS, item_id)
+        
+        if deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto '{item_id}' no encontrado en Redis"
+            )
+
+        return {"message": f"Producto '{item_id}' eliminado exitosamente de Redis"}
+
+    except redis.RedisError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error al eliminar de Redis: {str(e)}"
+        )
+
+@app.delete("/api/items/completed/clear", summary="Eliminar todos los productos comprados de Redis")
+def clear_completed_items():
+    """Busca todos los productos con completed=True y los remueve de Redis."""
+    try:
+        r = get_redis_client()
+        raw_items = r.hgetall(REDIS_KEY_ITEMS)
+        
+        removed_ids = []
+        for item_id, json_val in raw_items.items():
+            try:
+                data = json.loads(json_val)
+                if data.get("completed") is True:
+                    r.hdel(REDIS_KEY_ITEMS, item_id)
+                    removed_ids.append(item_id)
+            except json.JSONDecodeError:
+                continue
+
+        return {
+            "message": f"Se eliminaron {len(removed_ids)} productos completados de Redis",
+            "removed_ids": removed_ids
+        }
+
+    except redis.RedisError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error al limpiar completados en Redis: {str(e)}"
+        )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

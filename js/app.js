@@ -1,6 +1,11 @@
 /**
  * SuperList - Shopping List Application Logic
+ * Integración con API Python (FastAPI) + Redis & Fallback Offline en LocalStorage
  */
+
+// API Configuration
+const API_BASE_URL = 'http://localhost:8000/api';
+let isOnlineWithBackend = false;
 
 // Category Definitions
 const CATEGORIES = {
@@ -16,7 +21,7 @@ const CATEGORIES = {
   otros: { label: 'Otros', emoji: '📦' }
 };
 
-// Initial Sample Data (for fresh visits)
+// Initial Fallback Data
 const DEFAULT_ITEMS = [
   {
     id: 'item-1',
@@ -63,6 +68,7 @@ let currentCategory = 'all';
 let searchQuery = '';
 
 // DOM Elements
+const apiStatusBadge = document.getElementById('api-status-badge');
 const openModalBtn = document.getElementById('open-modal-btn');
 const emptyAddBtn = document.getElementById('empty-add-btn');
 const closeModalBtn = document.getElementById('close-modal-btn');
@@ -99,29 +105,80 @@ const toastContainer = document.getElementById('toast-container');
 const quickTagBtns = document.querySelectorAll('.tag-btn');
 
 // --- Initialization ---
-function initApp() {
-  loadItems();
+async function initApp() {
   setupEventListeners();
-  render();
+  await loadItems();
+  // Comprobar salud del backend periódicamente
+  setInterval(checkApiHealth, 15000);
 }
 
-// --- Local Storage Management ---
-function loadItems() {
+// --- API & State Synchronization ---
+function updateApiBadge(state, text) {
+  if (!apiStatusBadge) return;
+  apiStatusBadge.className = `api-badge ${state}`;
+  const textEl = apiStatusBadge.querySelector('.status-text');
+  if (textEl) textEl.textContent = text;
+}
+
+async function checkApiHealth() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.redis_connected) {
+        if (!isOnlineWithBackend) {
+          isOnlineWithBackend = true;
+          updateApiBadge('online', 'Redis Conectado');
+        }
+      } else {
+        isOnlineWithBackend = false;
+        updateApiBadge('offline', 'Redis Desconectado');
+      }
+    } else {
+      isOnlineWithBackend = false;
+      updateApiBadge('offline', 'Modo Offline');
+    }
+  } catch (err) {
+    isOnlineWithBackend = false;
+    updateApiBadge('offline', 'Modo Offline');
+  }
+}
+
+async function loadItems() {
+  updateApiBadge('checking', 'Conectando...');
+  
+  try {
+    const res = await fetch(`${API_BASE_URL}/items`, { signal: AbortSignal.timeout(3500) });
+    if (res.ok) {
+      items = await res.json();
+      isOnlineWithBackend = true;
+      updateApiBadge('online', 'Redis Conectado');
+      saveLocalBackup();
+      render();
+      return;
+    }
+  } catch (err) {
+    console.warn('Backend / Redis no alcanzable, cargando desde localStorage:', err.message);
+  }
+
+  // Fallback a localStorage
+  isOnlineWithBackend = false;
+  updateApiBadge('offline', 'Modo Offline');
   const saved = localStorage.getItem('superlist_items');
   if (saved) {
     try {
       items = JSON.parse(saved);
     } catch (e) {
-      console.error('Error parsing stored items:', e);
       items = [...DEFAULT_ITEMS];
     }
   } else {
     items = [...DEFAULT_ITEMS];
-    saveItems();
+    saveLocalBackup();
   }
+  render();
 }
 
-function saveItems() {
+function saveLocalBackup() {
   localStorage.setItem('superlist_items', JSON.stringify(items));
 }
 
@@ -214,7 +271,7 @@ function setupEventListeners() {
 }
 
 // --- Product Handlers ---
-function handleAddProduct(e) {
+async function handleAddProduct(e) {
   e.preventDefault();
   const name = productNameInput.value.trim();
   const category = productCategorySelect.value;
@@ -227,6 +284,30 @@ function handleAddProduct(e) {
     return;
   }
 
+  const payload = { name, category, quantity, note };
+
+  if (isOnlineWithBackend) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const createdItem = await res.json();
+        items.unshift(createdItem);
+        saveLocalBackup();
+        closeModal();
+        render();
+        showToast(`"${name}" guardado en Redis`, 'success');
+        return;
+      }
+    } catch (err) {
+      console.warn('Fallo al guardar en API, guardando localmente:', err);
+    }
+  }
+
+  // Fallback local
   const newItem = {
     id: 'item-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
     name,
@@ -238,26 +319,39 @@ function handleAddProduct(e) {
   };
 
   items.unshift(newItem);
-  saveItems();
+  saveLocalBackup();
   closeModal();
   render();
-  showToast(`"${name}" agregado a la lista`, 'success');
+  showToast(`"${name}" agregado localmente`, 'success');
 }
 
-function toggleItemStatus(id) {
+async function toggleItemStatus(id) {
   const item = items.find(i => i.id === id);
   if (!item) return;
 
-  item.completed = !item.completed;
-  saveItems();
+  const newStatus = !item.completed;
+  item.completed = newStatus;
+  saveLocalBackup();
   render();
+
+  if (isOnlineWithBackend) {
+    try {
+      await fetch(`${API_BASE_URL}/items/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: newStatus })
+      });
+    } catch (err) {
+      console.warn('No se pudo sincronizar el cambio con Redis:', err);
+    }
+  }
 
   if (item.completed) {
     showToast(`Comprado: ${item.name}`, 'info');
   }
 }
 
-function deleteItem(id) {
+async function deleteItem(id) {
   const itemIndex = items.findIndex(i => i.id === id);
   if (itemIndex === -1) return;
 
@@ -266,21 +360,29 @@ function deleteItem(id) {
 
   if (itemElement) {
     itemElement.classList.add('removing');
-    setTimeout(() => {
+    setTimeout(async () => {
       items.splice(itemIndex, 1);
-      saveItems();
+      saveLocalBackup();
       render();
       showToast(`"${itemName}" eliminado`, 'danger');
     }, 240);
   } else {
     items.splice(itemIndex, 1);
-    saveItems();
+    saveLocalBackup();
     render();
     showToast(`"${itemName}" eliminado`, 'danger');
   }
+
+  if (isOnlineWithBackend) {
+    try {
+      await fetch(`${API_BASE_URL}/items/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('No se pudo eliminar de Redis:', err);
+    }
+  }
 }
 
-function handleClearCompleted() {
+async function handleClearCompleted() {
   const completedCount = items.filter(i => i.completed).length;
   if (completedCount === 0) {
     showToast('No hay productos comprados para limpiar', 'info');
@@ -288,9 +390,17 @@ function handleClearCompleted() {
   }
 
   items = items.filter(i => !i.completed);
-  saveItems();
+  saveLocalBackup();
   render();
   showToast(`Se eliminaron ${completedCount} producto(s) comprados`, 'success');
+
+  if (isOnlineWithBackend) {
+    try {
+      await fetch(`${API_BASE_URL}/items/completed/clear`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('No se pudo limpiar en Redis:', err);
+    }
+  }
 }
 
 function handleCopyList() {
