@@ -108,3 +108,16 @@ def test_http_crud_contract():
         assert client.put(f"/api/items/{item_id}", json={"completed": True}).status_code == 200
         assert client.delete("/api/items/completed/clear").json()["removed_ids"] == [item_id]
         assert client.delete(f"/api/items/{item_id}").status_code == 404
+
+
+def test_redis_stats_endpoint():
+    with TestClient(main.app) as client:
+        # Create an item to have data in redis
+        client.post("/api/items", json={"name": "Leche"})
+        res = client.get("/api/redis/stats")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "ok"
+        assert "keys" in data
+        assert any(k["key"] == main.REDIS_KEY_ITEMS for k in data["keys"])
+

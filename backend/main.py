@@ -29,8 +29,10 @@ app.add_middleware(
 )
 
 # Configuración de Redis
+REDIS_URL = os.getenv("REDIS_URL", None)
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 REDIS_KEY_ITEMS = "superlist:items"
 
 # Instancia global de Redis (con soporte para fallback en memoria si no hay Redis levantado)
@@ -40,7 +42,7 @@ _redis_mode = "unknown"
 def get_redis_client():
     """
     Retorna la instancia de cliente de Redis.
-    1. Intenta conectarse a un servidor Redis real en REDIS_HOST:REDIS_PORT.
+    1. Si REDIS_URL o REDIS_HOST están definidos, intenta conectarse al servidor Redis real.
     2. Si no hay un servidor Redis activo, utiliza una instancia de Redis en memoria (fakeredis)
        para permitir pruebas locales inmediatas sin Docker.
     """
@@ -51,15 +53,28 @@ def get_redis_client():
 
     # Intentar conexión a Redis real
     try:
-        real_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            decode_responses=True,
-            socket_connect_timeout=1
-        )
-        real_client.ping()
-        _redis_client = real_client
-        _redis_mode = f"Servidor Redis ({REDIS_HOST}:{REDIS_PORT})"
+        if REDIS_URL:
+            real_client = redis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=2
+            )
+            real_client.ping()
+            _redis_client = real_client
+            host_info = REDIS_URL.split("@")[-1] if "@" in REDIS_URL else REDIS_URL
+            _redis_mode = f"Servidor Redis ({host_info})"
+        else:
+            real_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                decode_responses=True,
+                socket_connect_timeout=1
+            )
+            real_client.ping()
+            _redis_client = real_client
+            _redis_mode = f"Servidor Redis ({REDIS_HOST}:{REDIS_PORT})"
+            
         print(f"[*] Conectado exitosamente a {_redis_mode}")
         return _redis_client
     except Exception:
@@ -269,6 +284,68 @@ def clear_completed_items():
         "removed_ids": removed_ids
     }
 
+@app.get("/api/redis/stats", summary="Visualizar variables y estado interno de Redis")
+def get_redis_stats():
+    """Retorna información detallada de las claves, tipos, valores y memoria en Redis."""
+    r = get_redis_client()
+    try:
+        keys = list(r.keys("*"))
+        keys_info = []
+        for k in keys:
+            k_type = r.type(k)
+            key_data = {
+                "key": k,
+                "type": k_type,
+            }
+            if k_type == "hash":
+                raw_hash = r.hgetall(k)
+                key_data["field_count"] = len(raw_hash)
+                parsed_hash = {}
+                for field, val in raw_hash.items():
+                    try:
+                        parsed_hash[field] = json.loads(val)
+                    except Exception:
+                        parsed_hash[field] = val
+                key_data["data"] = parsed_hash
+            elif k_type == "string":
+                key_data["data"] = r.get(k)
+            keys_info.append(key_data)
+
+        info_dict = {}
+        try:
+            raw_info = r.info()
+            info_dict = {
+                "redis_version": str(raw_info.get("redis_version", "N/A")),
+                "used_memory_human": str(raw_info.get("used_memory_human", "N/A")),
+                "connected_clients": int(raw_info.get("connected_clients", 1)),
+                "uptime_in_seconds": int(raw_info.get("uptime_in_seconds", 0)),
+            }
+        except Exception:
+            info_dict = {
+                "redis_version": "fakeredis (en memoria)",
+                "used_memory_human": "En memoria",
+                "connected_clients": 1,
+                "uptime_in_seconds": 0,
+            }
+
+        return {
+            "status": "ok",
+            "redis_mode": _redis_mode,
+            "total_keys": len(keys),
+            "keys": keys_info,
+            "info": info_dict
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "redis_mode": _redis_mode,
+            "error": str(e),
+            "keys": []
+        }
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    host = os.getenv("HOST", "127.0.0.1")
+    uvicorn.run("main:app", host=host, port=port, reload=True)
+
