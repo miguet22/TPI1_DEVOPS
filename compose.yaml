@@ -1,17 +1,47 @@
 services:
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
+  proxy:
+    image: nginx:stable-alpine
     ports:
       - "127.0.0.1:8080:80"
+    volumes:
+      - ./nginx/proxy.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
+      frontend:
+        condition: service_healthy
+      frontend2:
+        condition: service_healthy
+      frontend3:
+        condition: service_healthy
       backend:
+        condition: service_healthy
+      backend2:
+        condition: service_healthy
+      backend3:
         condition: service_healthy
     networks:
       - web
 
-  backend:
+  frontend: &frontend
+    image: superlist-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - web
+
+  frontend2:
+    <<: *frontend
+
+  frontend3:
+    <<: *frontend
+
+  backend: &backend
+    image: superlist-api:local
     build:
       context: ./backend
     environment:
@@ -33,6 +63,12 @@ services:
     networks:
       - web
       - data
+
+  backend2:
+    <<: *backend
+
+  backend3:
+    <<: *backend
 
   redis:
     image: redis:7-alpine

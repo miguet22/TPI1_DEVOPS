@@ -38,57 +38,83 @@ TP1_devops/
 
 ---
 
-## 🚀 Guía de Ejecución en Local (Paso a Paso)
+## Ejecutar en local con proxy y replicas
 
-### 1. Requisitos Previos
-- **Python 3.10 o superior** instalado en el sistema.
-- **Git** (opcional, para clonar el repositorio).
-
----
-
-### 2. Instalar las dependencias del Backend
-
-Abre una terminal en la raíz del proyecto y ejecuta:
+Requisito: Docker con Docker Compose y el motor iniciado.
+Desde la raiz del proyecto:
 
 ```powershell
-pip install -r backend/requirements.txt
+docker compose build frontend backend
+docker compose up -d --no-build --wait
 ```
 
----
+Abrir [la web](http://localhost:8080) o [Swagger](http://localhost:8080/docs).
+Se construye una imagen para la web y otra para la API; cada imagen se usa
+para tres contenedores. Solo el proxy publica un puerto en el host.
 
-### 3. Iniciar el Backend (API en Python)
+```text
+Navegador -> proxy :8080
+              |-- /                 -> frontend, frontend2, frontend3
+              |-- /api/, /docs,
+                  /openapi.json     -> backend, backend2, backend3 -> Redis
+```
 
-En la terminal, ingresa a la carpeta `backend` y ejecuta el servidor:
+Nginx reparte las solicitudes por round robin y aparta temporalmente un nodo
+cuando falla una conexion. Reintenta con otro nodo hasta tres intentos,
+con un segundo de timeout de conexion. Redis permanece en una red interna
+accesible solo por las API, con el volumen persistente existente.
+
+### Demostrar balanceo, caida y recuperacion (punto 6)
+
+Con todos los contenedores levantados, ejecutar desde PowerShell:
 
 ```powershell
-cd backend
-python main.py
+.\scripts\demo-failover.ps1
 ```
 
-> 💡 **Nota sobre Redis**:  
-> El backend cuenta con detección inteligente:
-> - Si tienes un servidor Redis corriendo en `localhost:6379`, se conectará automáticamente a él.
-> - Si **no** tienes Redis instalado o no usas Docker, el backend levantará un **motor Redis en memoria (`fakeredis`)** de forma transparente, permitiendo que todas las funciones (`HSET`, `HGETALL`, `HDEL`) operen al 100% sin configuraciones adicionales.
+El script verifica tres identificadores distintos de web y API, crea un producto
+temporal y comprueba que las replicas compartan sus cambios. Luego detiene
+`frontend` y `backend`, verifica que las otras dos replicas de cada servicio
+respondan y repite las operaciones de crear, completar, consultar y eliminar.
+Finalmente restaura los contenedores, incluso si falla la prueba, y verifica
+que vuelvan a responder tres nodos. Solo elimina el producto temporal de prueba.
+
+Para una demostracion manual:
+
+```powershell
+docker compose ps
+docker compose stop frontend backend
+# Usar la web y comprobar que todavia permite operar.
+docker compose start --wait frontend backend
+```
+
+En las herramientas del navegador, pestana Network, las cabeceras de respuesta
+`X-Web-Node` y `X-API-Node` identifican el contenedor que atendio la solicitud.
+`X-Upstream-Addr` muestra las direcciones que intento contactar el proxy.
+Tambien se pueden consultar desde PowerShell:
+
+```powershell
+1..9 | ForEach-Object {
+    (Invoke-WebRequest -UseBasicParsing http://localhost:8080/).Headers['X-Web-Node']
+    (Invoke-WebRequest -UseBasicParsing http://localhost:8080/api/health).Headers['X-API-Node']
+}
+```
+
+La tolerancia cubre la caida de replicas de web/API; el proxy y Redis siguen
+siendo instancias unicas. Una peticion que ya estaba en curso durante la caida
+puede fallar. No se fuerzan reintentos de POST que ya fueron enviados, para
+no duplicar productos. Los nodos recuperados se reincorporan tras el intervalo
+de deteccion (unos segundos). El proxy actualiza las IP usando el DNS de Docker
+si se recrean los contenedores.
+
+Referencias: [balanceo Nginx](https://nginx.org/en/docs/http/load_balancing.html)
+y [reintentos del proxy](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream).
+
+Para detener el conjunto conservando los datos: `docker compose down`.
+No agregar `-v` si se desea conservar el volumen de Redis.
 
 ---
-
-### 4. Iniciar la Aplicación Web (Frontend)
-
-Tienes dos opciones para abrir la web:
-
-- **Opción A (Recomendada con servidor local)**:
-  Abre una **segunda terminal** en la carpeta raíz del proyecto y ejecuta:
-  ```powershell
-  python -m http.server 8080
-  ```
-  Luego abre en tu navegador: [http://localhost:8080/index.html](http://localhost:8080/index.html)
-
-- **Opción B (Directa)**:  
-  Haz doble clic en el archivo `index.html` para abrirlo directamente en tu navegador favorito.
-
----
-
-## 🔌 Endpoints de la API Backend (`http://localhost:8000`)
+## 🔌 Endpoints de la API Backend (`http://localhost:8080`)
 
 | Método | Endpoint | Descripción | Operación en Redis |
 | :--- | :--- | :--- | :--- |
@@ -101,7 +127,7 @@ Tienes dos opciones para abrir la web:
 
 ### 📖 Documentación Interactiva (Swagger UI)
 Con el backend en ejecución, puedes explorar, probar y ejecutar todas las llamadas a la API interactivamente ingresando a:
-👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
+👉 **[http://localhost:8080/docs](http://localhost:8080/docs)**
 
 ---
 

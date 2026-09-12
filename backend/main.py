@@ -28,6 +28,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def identify_api_node(request, call_next):
+    response = await call_next(request)
+    response.headers["X-API-Node"] = os.getenv("HOSTNAME", "local")
+    return response
+
+
 # Configuración de Redis
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
