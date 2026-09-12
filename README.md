@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml/badge.svg?branch=actions)](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml?query=branch%3Aactions)
 [![Valoración SAST Python](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmiguet22%2FTPI1_DEVOPS%2Fci-badges%2Factions.json)](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml?query=branch%3Aactions)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=miguet22_TPI1_DEVOPS&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=miguet22_TPI1_DEVOPS)
 
 > **Trabajo Práctico N° 1 - DevOps**  
 > Aplicación web interactiva que consume una API REST en Python (FastAPI) con persistencia y caché en **Redis**.
@@ -156,12 +157,40 @@ junto al badge CI si una ejecución fue cancelada o falló la publicación.
 Al integrar en `main`, cambiar `branch=actions`, `branch%3Aactions` y `actions.json`
 en los enlaces superiores por sus equivalentes de `main`.
 
+### Análisis de código con SonarCloud
+
+Además de Bandit, el workflow corre un job `sonarcloud` que envía cobertura de
+tests y análisis estático (bugs, code smells, vulnerabilidades, duplicación)
+a [SonarCloud](https://sonarcloud.io), gratuito para repos públicos. Cubre
+tanto `backend` (Python) como `js` (JavaScript del frontend).
+
+Para activarlo, alguien del grupo con acceso admin al repo debe:
+
+1. Entrar a [sonarcloud.io](https://sonarcloud.io) e iniciar sesión con la
+   cuenta de GitHub del repositorio (u organización).
+2. Importar el repositorio `miguet22/TPI1_DEVOPS` como nuevo proyecto.
+3. Verificar que el "Organization Key" y el "Project Key" coincidan con los
+   configurados en [`sonar-project.properties`](sonar-project.properties)
+   (`sonar.organization` y `sonar.projectKey`); si SonarCloud asigna otros
+   valores, actualizar ese archivo para que coincidan.
+4. En SonarCloud: **My Account → Security** (o en el proyecto, **Administration
+   → Analysis Method**), generar un token.
+5. En GitHub: **Settings → Secrets and variables → Actions → New repository
+   secret**, crear `SONAR_TOKEN` con ese valor.
+6. Desactivar "Automatic Analysis" en la configuración del proyecto en
+   SonarCloud (Administration → Analysis Method), porque el análisis lo
+   dispara el workflow de GitHub Actions, no SonarCloud directamente.
+
+Una vez configurado, cada push o PR corre el análisis y actualiza el Quality
+Gate. El badge de arriba refleja el resultado del último análisis en la rama
+por defecto de SonarCloud.
+
 Para repetir las comprobaciones desde la raíz del repositorio:
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m pytest -q --junitxml=reports/tests.xml
 New-Item -ItemType Directory -Force reports | Out-Null
+python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:reports/coverage.xml
 python -m bandit -r backend -f json -o reports/bandit.json --exit-zero
 python scripts/sast_rating.py reports/bandit.json reports/sast.json
 ```

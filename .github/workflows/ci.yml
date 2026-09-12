@@ -30,13 +30,41 @@ jobs:
             backend/requirements.txt
             requirements-dev.txt
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest -q --junitxml=reports/tests.xml
+      - run: python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:reports/coverage.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: reports/tests.xml
+          path: reports/
           if-no-files-found: warn
+
+  sonarcloud:
+    name: Analisis de codigo (SonarCloud)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always() && !cancelled()
+    env:
+      SONAR_TOKEN_SET: ${{ secrets.SONAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        if: env.SONAR_TOKEN_SET == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: env.SONAR_TOKEN_SET == 'true'
+        with:
+          name: test-results
+          path: reports
+      - uses: SonarSource/sonarqube-scan-action@v4
+        if: env.SONAR_TOKEN_SET == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+      - name: Aviso si falta configurar SONAR_TOKEN
+        if: env.SONAR_TOKEN_SET != 'true'
+        run: echo "::warning::SONAR_TOKEN no está configurado como secret del repo; se omite el análisis de SonarCloud. Ver README para configurarlo."
 
   sast:
     name: SAST Python (Bandit)
