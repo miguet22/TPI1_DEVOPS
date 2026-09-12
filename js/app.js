@@ -4,7 +4,7 @@
  */
 
 // API Configuration
-const API_BASE_URL = window.API_BASE_URL || localStorage.getItem('superlist_api_url') || '/api';
+const API_BASE_URL = '/api';
 let isOnlineWithBackend = false;
 
 // Category Definitions
