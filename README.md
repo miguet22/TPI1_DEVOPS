@@ -238,6 +238,57 @@ python -m bandit -r backend -f json -o reports/bandit.json --exit-zero
 python scripts/sast_rating.py reports/bandit.json reports/sast.json
 ```
 
+---
+
+## 📦 CI/CD: Publicación de Imágenes en Docker Hub
+
+El workflow de GitHub Actions está configurado para compilar y subir automáticamente las imágenes de **Backend** y **Frontend** a **Docker Hub** cada vez que se hace `push` a la rama `main` (una vez aprobados los tests y el SAST).
+
+### Configuración de Secretos en GitHub
+
+En tu repositorio de GitHub, ve a **Settings** > **Secrets and variables** > **Actions** y crea los siguientes secretos:
+
+1. `DOCKERHUB_USERNAME`: Tu usuario de Docker Hub.
+2. `DOCKERHUB_TOKEN`: Tu Access Token de Docker Hub (generado en Docker Hub > *Account Settings* > *Security* > *New Access Token*).
+3. *(Opcional)* `RENDER_DEPLOY_HOOK_BACKEND`: URL del Deploy Hook del Backend en Render.
+4. *(Opcional)* `RENDER_DEPLOY_HOOK_FRONTEND`: URL del Deploy Hook del Frontend en Render.
+
+Las imágenes se publican con las siguientes etiquetas:
+- `<DOCKERHUB_USER>/superlist-backend:latest`
+- `<DOCKERHUB_USER>/superlist-backend:<SHA_COMMIT>`
+- `<DOCKERHUB_USER>/superlist-frontend:latest`
+- `<DOCKERHUB_USER>/superlist-frontend:<SHA_COMMIT>`
+
+---
+
+## ☁️ Despliegue en la Nube con Render
+
+Para desplegar la aplicación en [Render.com](https://render.com) utilizando las imágenes publicadas en Docker Hub:
+
+### Paso 1: Crear la Base de Datos Redis en la Nube
+1. En el Dashboard de Render, haz clic en **New +** > **Redis** (o utiliza un Redis gratuito en [Upstash](https://upstash.com)).
+2. Copia la **Internal Redis URL** (o *External Redis URL* si el backend está en otra red).
+
+### Paso 2: Desplegar el Backend (FastAPI)
+1. En Render, haz clic en **New +** > **Web Service** > **Deploy an existing image**.
+2. Ingresa la URL de la imagen: `docker.io/<tu-usuario-dockerhub>/superlist-backend:latest`.
+3. En la sección de **Environment Variables**, añade:
+   - `REDIS_URL`: La URL de conexión a Redis (ej: `redis://red-xxxx:6379` o `rediss://default:xxxx@host:port`).
+4. Haz clic en **Deploy Web Service**. Render te asignará una URL pública (ej. `https://superlist-backend.onrender.com`).
+
+### Paso 3: Desplegar el Frontend
+1. En Render, haz clic en **New +** > **Web Service** > **Deploy an existing image**.
+2. Ingresa la URL de la imagen: `docker.io/<tu-usuario-dockerhub>/superlist-frontend:latest`.
+3. *(Opcional)* Copia el **Deploy Hook** de Render y agrégalo a los secretos de GitHub (`RENDER_DEPLOY_HOOK_...`) para despliegue continuo 100% automático.
+
+---
+
+## ⚡ Visualización de Variables en Redis (Rúbrica TP1)
+
+El sistema incluye un **Visor de Variables en Tiempo Real** para inspeccionar la caché de Redis:
+- 🖥️ **En la Interfaz Web**: Presiona el botón **"⚡ Visor Redis"** en la barra superior de la aplicación para abrir el modal interactivo con el estado del servidor, claves activas, tipos de datos y los registros JSON en `superlist:items`.
+- 🔌 **Vía API REST**: Endpoint `GET /api/redis/stats` que devuelve en formato JSON las métricas, claves y campos del hash.
+
 ### Notificaciones del CI en Discord
 
 El job `notify-discord` espera a los tests, Bandit, SonarCloud y la publicación

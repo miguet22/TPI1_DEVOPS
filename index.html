@@ -34,10 +34,16 @@
           <p class="subtitle">Organiza tus compras • FastAPI + Redis</p>
         </div>
       </div>
-      <button id="open-modal-btn" class="btn btn-primary btn-glow" aria-haspopup="dialog">
-        <span class="btn-icon">➕</span>
-        <span>Agregar Producto</span>
-      </button>
+      <div class="header-actions">
+        <button id="open-redis-modal-btn" class="btn btn-secondary" title="Explorar variables y datos en Redis">
+          <span class="btn-icon">⚡</span>
+          <span>Visor Redis</span>
+        </button>
+        <button id="open-modal-btn" class="btn btn-primary btn-glow" aria-haspopup="dialog">
+          <span class="btn-icon">➕</span>
+          <span>Agregar Producto</span>
+        </button>
+      </div>
     </header>
 
     <p id="connection-notice" class="connection-notice hidden" role="status" aria-live="polite"></p>
@@ -230,6 +236,55 @@
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Redis Explorer Modal -->
+  <div id="redis-modal-overlay" class="modal-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="redis-modal-title">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-header-title">
+          <span class="modal-badge-icon">⚡</span>
+          <h3 id="redis-modal-title">Variables y Estado en Redis</h3>
+        </div>
+        <button id="close-redis-modal-btn" class="modal-close-btn" aria-label="Cerrar modal de Redis">✕</button>
+      </div>
+
+      <div class="redis-modal-body">
+        <!-- Redis Metadata Cards -->
+        <div class="redis-stats-row">
+          <div class="redis-stat-card">
+            <span class="redis-stat-label">Modo / Conexión</span>
+            <strong id="redis-mode-badge" class="redis-stat-val text-accent">Detectando...</strong>
+          </div>
+          <div class="redis-stat-card">
+            <span class="redis-stat-label">Total Claves</span>
+            <strong id="redis-keys-count" class="redis-stat-val">0</strong>
+          </div>
+          <div class="redis-stat-card">
+            <span class="redis-stat-label">Memoria Usada</span>
+            <strong id="redis-memory-used" class="redis-stat-val">-</strong>
+          </div>
+        </div>
+
+        <!-- Redis Keys & Data View -->
+        <div class="redis-section-title-row">
+          <h4>Claves y Estructuras en Caché</h4>
+          <button id="refresh-redis-btn" class="btn btn-secondary btn-sm" title="Refrescar datos de Redis">
+            <span>🔄</span> Refrescar
+          </button>
+        </div>
+
+        <div id="redis-keys-container" class="redis-keys-container">
+          <!-- Injected dynamically via JS -->
+          <div class="redis-loading">Cargando estado de Redis...</div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span class="redis-footer-note">💡 Datos en tiempo real recuperados mediante FastAPI y Redis</span>
+        <button type="button" id="close-redis-btn-bottom" class="btn btn-secondary">Cerrar</button>
+      </div>
     </div>
   </div>
 

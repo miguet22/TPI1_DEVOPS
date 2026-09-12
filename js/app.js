@@ -64,6 +64,17 @@ const clearCompletedBtn = document.getElementById('clear-completed-btn');
 const toastContainer = document.getElementById('toast-container');
 const quickTagBtns = document.querySelectorAll('.tag-btn');
 
+// Redis Explorer DOM Elements
+const openRedisModalBtn = document.getElementById('open-redis-modal-btn');
+const closeRedisModalBtn = document.getElementById('close-redis-modal-btn');
+const closeRedisBtnBottom = document.getElementById('close-redis-btn-bottom');
+const redisModalOverlay = document.getElementById('redis-modal-overlay');
+const refreshRedisBtn = document.getElementById('refresh-redis-btn');
+const redisModeBadge = document.getElementById('redis-mode-badge');
+const redisKeysCount = document.getElementById('redis-keys-count');
+const redisMemoryUsed = document.getElementById('redis-memory-used');
+const redisKeysContainer = document.getElementById('redis-keys-container');
+
 // --- Initialization ---
 async function initApp() {
   setupEventListeners();
@@ -188,11 +199,127 @@ function closeModal() {
   document.body.style.overflow = '';
 }
 
+// --- Redis Explorer Modal Logic ---
+function openRedisModal() {
+  if (!redisModalOverlay) return;
+  redisModalOverlay.classList.add('active');
+  redisModalOverlay.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  loadRedisStats();
+}
+
+function closeRedisModal() {
+  if (!redisModalOverlay) return;
+  redisModalOverlay.classList.remove('active');
+  redisModalOverlay.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+
+async function loadRedisStats() {
+  if (!redisKeysContainer) return;
+  redisKeysContainer.innerHTML = '<div class="redis-loading">Consultando datos en tiempo real de Redis...</div>';
+  
+  try {
+    const res = await fetch(`${API_BASE_URL}/redis/stats`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    if (redisModeBadge) redisModeBadge.textContent = data.redis_mode || 'Desconocido';
+    if (redisKeysCount) redisKeysCount.textContent = data.total_keys ?? (data.keys ? data.keys.length : 0);
+    if (redisMemoryUsed) redisMemoryUsed.textContent = data.info?.used_memory_human || 'En memoria';
+
+    if (!data.keys || data.keys.length === 0) {
+      redisKeysContainer.innerHTML = `
+        <div class="redis-loading">
+          <p>No se encontraron claves en Redis actualmente.</p>
+        </div>
+      `;
+      return;
+    }
+
+    let html = '';
+    data.keys.forEach(k => {
+      html += `
+        <div class="redis-key-box">
+          <div class="redis-key-header">
+            <div>
+              <span class="redis-key-name">🔑 ${escapeHTML(k.key)}</span>
+              <span class="redis-footer-note" style="margin-left: 0.5rem;">(${k.field_count !== undefined ? `${k.field_count} campos` : ''})</span>
+            </div>
+            <span class="redis-key-badge">${escapeHTML(k.type)}</span>
+          </div>
+          <div class="redis-key-body">
+      `;
+
+      if (k.type === 'hash' && k.data && typeof k.data === 'object') {
+        html += `
+          <table class="redis-hash-table">
+            <thead>
+              <tr>
+                <th style="width: 25%;">Campo (Field / ID)</th>
+                <th>Valor Almacenado (JSON)</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        for (const [field, val] of Object.entries(k.data)) {
+          const formattedVal = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val);
+          html += `
+            <tr>
+              <td class="redis-field-name">${escapeHTML(field)}</td>
+              <td><pre class="redis-field-value">${escapeHTML(formattedVal)}</pre></td>
+            </tr>
+          `;
+        }
+        html += `</tbody></table>`;
+      } else if (k.data) {
+        const strVal = typeof k.data === 'object' ? JSON.stringify(k.data, null, 2) : String(k.data);
+        html += `<pre class="redis-field-value">${escapeHTML(strVal)}</pre>`;
+      }
+
+      html += `
+          </div>
+        </div>
+      `;
+    });
+
+    redisKeysContainer.innerHTML = html;
+  } catch (err) {
+    console.warn('Error al cargar stats de Redis:', err);
+    if (redisModeBadge) redisModeBadge.textContent = 'Modo Local / Desconectado';
+    if (redisKeysCount) redisKeysCount.textContent = items.length;
+    if (redisMemoryUsed) redisMemoryUsed.textContent = 'LocalStorage';
+
+    redisKeysContainer.innerHTML = `
+      <div class="redis-key-box">
+        <div class="redis-key-header">
+          <span class="redis-key-name">💾 superlist:items (Caché local de respaldo)</span>
+          <span class="redis-key-badge">LOCAL</span>
+        </div>
+        <div class="redis-key-body">
+          <pre class="redis-field-value">${escapeHTML(JSON.stringify(items, null, 2))}</pre>
+        </div>
+      </div>
+    `;
+  }
+}
+
 // --- Event Listeners Setup ---
 function setupEventListeners() {
   // Modal openers
   openModalBtn.addEventListener('click', openModal);
   if (emptyAddBtn) emptyAddBtn.addEventListener('click', openModal);
+
+  // Redis Modal
+  if (openRedisModalBtn) openRedisModalBtn.addEventListener('click', openRedisModal);
+  if (closeRedisModalBtn) closeRedisModalBtn.addEventListener('click', closeRedisModal);
+  if (closeRedisBtnBottom) closeRedisBtnBottom.addEventListener('click', closeRedisModal);
+  if (refreshRedisBtn) refreshRedisBtn.addEventListener('click', loadRedisStats);
+  if (redisModalOverlay) {
+    redisModalOverlay.addEventListener('click', (e) => {
+      if (e.target === redisModalOverlay) closeRedisModal();
+    });
+  }
 
   // Modal closers
   closeModalBtn.addEventListener('click', closeModal);
@@ -203,8 +330,9 @@ function setupEventListeners() {
 
   // Keyboard accessibility
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
-      closeModal();
+    if (e.key === 'Escape') {
+      if (modalOverlay.classList.contains('active')) closeModal();
+      if (redisModalOverlay && redisModalOverlay.classList.contains('active')) closeRedisModal();
     }
   });
 
@@ -482,7 +610,7 @@ function showToast(message, type = 'info') {
 
 // --- Helper Utilities ---
 function escapeHTML(str) {
-  return str.replace(/[&<>'"]/g, 
+  return String(str ?? '').replace(/[&<>'"]/g, 
     tag => ({
       '&': '&amp;',
       '<': '&lt;',
