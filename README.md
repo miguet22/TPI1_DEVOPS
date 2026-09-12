@@ -194,3 +194,28 @@ python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:
 python -m bandit -r backend -f json -o reports/bandit.json --exit-zero
 python scripts/sast_rating.py reports/bandit.json reports/sast.json
 ```
+
+### Notificaciones del CI en Discord
+
+El job `notify-discord` espera a los tests, Bandit, SonarCloud y la publicación
+del badge. Envía `CI OK` si las comprobaciones finalizan correctamente,
+`CI FALLÓ` si algún job falla o `CI INCOMPLETO` si faltan comprobaciones.
+El mensaje incluye el resultado de cada job, la rama, el commit y un enlace
+a la ejecución. SonarCloud sin token se informa como omitido; el badge también
+puede omitirse en ramas donde no se publica, sin convertir el CI en un fallo.
+
+Para activarlo:
+
+1. En el canal de Discord, abrir **Editar canal → Integraciones → Webhooks**,
+   crear un webhook y copiar su URL.
+2. En el repositorio de GitHub, abrir **Settings → Secrets and variables →
+   Actions → New repository secret**.
+3. Crear el secreto `DISCORD_WEBHOOK_URL` con la URL del webhook como valor.
+4. Subir el workflow y ejecutar el CI mediante un push o **Run workflow**.
+
+No guardar la URL en el código. Si el secreto no está disponible (por ejemplo,
+en PRs desde forks), se omite el envío con un aviso. Las ejecuciones canceladas
+no envían notificación. Un error de Discord se registra como advertencia y no
+cambia el resultado de los controles del CI.
+
+Referencia: [webhooks de Discord](https://docs.discord.com/developers/resources/webhook).
