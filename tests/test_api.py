@@ -28,11 +28,12 @@ def test_create_persists_normalized_item(storage):
     assert json.loads(storage.hget(main.REDIS_KEY_ITEMS, item["id"])) == item
 
 
-def test_list_seeds_once_and_orders_newest_first():
-    first = main.get_all_items()
-    assert len(first) == len(main.DEFAULT_SAMPLE_ITEMS)
-    assert main.get_all_items() == first
-    assert [i["createdAt"] for i in first] == sorted((i["createdAt"] for i in first), reverse=True)
+def test_list_stays_empty_without_sample_items():
+    assert main.get_all_items() == []
+    item = main.create_item(main.ItemCreate(name="Pan"))
+    main.delete_item(item["id"])
+    assert main.get_all_items() == []
+    assert main.get_all_items() == []
 
 
 def test_list_skips_invalid_json(storage):

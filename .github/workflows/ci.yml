@@ -30,13 +30,46 @@ jobs:
             backend/requirements.txt
             requirements-dev.txt
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest -q --junitxml=reports/tests.xml
+      - run: python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:reports/coverage.xml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Tests de disponibilidad del frontend
+        run: node --test tests/test_frontend.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: reports/tests.xml
+          path: reports/
           if-no-files-found: warn
+
+  sonarcloud:
+    name: Analisis de codigo (SonarCloud)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always() && !cancelled()
+    env:
+      SONAR_TOKEN_SET: ${{ secrets.SONAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        if: env.SONAR_TOKEN_SET == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: env.SONAR_TOKEN_SET == 'true'
+        with:
+          name: test-results
+          path: reports
+      - uses: SonarSource/sonarqube-scan-action@v4
+        if: env.SONAR_TOKEN_SET == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+      - name: Aviso si falta configurar SONAR_TOKEN
+        if: env.SONAR_TOKEN_SET != 'true'
+        run: echo "::warning::SONAR_TOKEN no está configurado como secret del repo; se omite el análisis de SonarCloud. Ver README para configurarlo."
 
   sast:
     name: SAST Python (Bandit)
@@ -187,3 +220,65 @@ jobs:
           echo "Disparando despliegue de Frontend en Render..."
           curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}"
 
+  notify-discord:
+    name: Notificar resultado en Discord
+    needs: [tests, sast, sonarcloud, publish-rating]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enviar resumen del CI
+        uses: actions/github-script@v7
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          CI_RESULTS: ${{ toJSON(needs) }}
+          SONAR_CONFIGURED: ${{ secrets.SONAR_TOKEN != '' }}
+        with:
+          script: |
+            const webhook = process.env.DISCORD_WEBHOOK_URL;
+            if (!webhook) {
+              core.warning('Falta DISCORD_WEBHOOK_URL; se omite la notificación a Discord.');
+              return;
+            }
+            const jobs = JSON.parse(process.env.CI_RESULTS);
+            const failed = Object.values(jobs).some(job => job.result === 'failure');
+            const incomplete = ['tests', 'sast', 'sonarcloud'].some(name => jobs[name].result !== 'success')
+              || Object.values(jobs).some(job => job.result === 'cancelled');
+            const title = failed ? 'CI FALLÓ' : incomplete ? 'CI INCOMPLETO' : 'CI OK';
+            const labels = { success: 'OK', failure: 'FALLÓ', skipped: 'Omitido', cancelled: 'Cancelado' };
+            const names = { tests: 'Tests', sast: 'SAST (Bandit)', sonarcloud: 'SonarCloud', 'publish-rating': 'Badge SAST' };
+            const details = Object.entries(jobs).map(([name, job]) => {
+              const result = name === 'sonarcloud' && process.env.SONAR_CONFIGURED !== 'true'
+                ? 'Omitido: falta SONAR_TOKEN' : labels[job.result] || job.result;
+              return `${names[name]}: ${result}`;
+            }).join('\n');
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const payload = {
+              allowed_mentions: { parse: [] },
+              embeds: [{
+                title,
+                url: runUrl,
+                color: failed ? 15158332 : incomplete ? 15844367 : 3066993,
+                description: details,
+                fields: [
+                  { name: 'Repositorio', value: process.env.GITHUB_REPOSITORY },
+                  { name: 'Rama / referencia', value: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME },
+                  { name: 'Commit', value: process.env.GITHUB_SHA.slice(0, 7) }
+                ]
+              }]
+            };
+            try {
+              const url = new URL(webhook);
+              url.searchParams.set('wait', 'true');
+              const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (!response.ok) {
+                core.warning(`Discord rechazó la notificación (HTTP ${response.status}).`);
+              }
+            } catch {
+              core.warning('No se pudo enviar la notificación a Discord. Revisar el webhook y la conectividad.');
+            }

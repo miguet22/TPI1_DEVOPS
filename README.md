@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml/badge.svg?branch=actions)](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml?query=branch%3Aactions)
 [![Valoración SAST Python](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmiguet22%2FTPI1_DEVOPS%2Fci-badges%2Factions.json)](https://github.com/miguet22/TPI1_DEVOPS/actions/workflows/ci.yml?query=branch%3Aactions)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=miguet22_TPI1_DEVOPS&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=miguet22_TPI1_DEVOPS)
 
 > **Trabajo Práctico N° 1 - DevOps**  
 > Aplicación web interactiva que consume una API REST en Python (FastAPI) con persistencia y caché en **Redis**.
@@ -29,7 +30,7 @@ TP1_devops/
 ├── css/
 │   └── styles.css           # Estilos visuales, diseño responsive, glassmorphism y tema oscuro
 ├── js/
-│   └── app.js               # Lógica del cliente, fetch a la API y fallback offline
+│   └── app.js               # Lógica del cliente, API y recuperación de conexión
 ├── index.html               # Interfaz web principal y modal
 ├── .gitignore               # Archivos ignorados por Git
 └── README.md                # Guía de instalación y uso
@@ -37,57 +38,100 @@ TP1_devops/
 
 ---
 
-## 🚀 Guía de Ejecución en Local (Paso a Paso)
+## Ejecutar en local con proxy y replicas
 
-### 1. Requisitos Previos
-- **Python 3.10 o superior** instalado en el sistema.
-- **Git** (opcional, para clonar el repositorio).
-
----
-
-### 2. Instalar las dependencias del Backend
-
-Abre una terminal en la raíz del proyecto y ejecuta:
+Requisito: Docker con Docker Compose y el motor iniciado.
+Desde la raiz del proyecto:
 
 ```powershell
-pip install -r backend/requirements.txt
+docker compose build frontend backend
+docker compose up -d --no-build --wait
 ```
 
----
+Abrir [la web](http://localhost:8080) o [Swagger](http://localhost:8080/docs).
+Se construye una imagen para la web y otra para la API; cada imagen se usa
+para tres contenedores. Solo el proxy publica un puerto en el host.
 
-### 3. Iniciar el Backend (API en Python)
+```text
+Navegador -> proxy :8080
+              |-- /                 -> frontend, frontend2, frontend3
+              |-- /api/, /docs,
+                  /openapi.json     -> backend, backend2, backend3 -> Redis
+```
 
-En la terminal, ingresa a la carpeta `backend` y ejecuta el servidor:
+Nginx reparte las solicitudes por round robin y aparta temporalmente un nodo
+cuando falla una conexion. Reintenta con otro nodo hasta tres intentos,
+con un segundo de timeout de conexion. Redis permanece en una red interna
+accesible solo por las API, con el volumen persistente existente.
+
+### Demostrar balanceo, caida y recuperacion (punto 6)
+
+Con todos los contenedores levantados, ejecutar desde PowerShell:
 
 ```powershell
-cd backend
-python main.py
+.\scripts\demo-failover.ps1
 ```
 
-> 💡 **Nota sobre Redis**:  
-> El backend cuenta con detección inteligente:
-> - Si tienes un servidor Redis corriendo en `localhost:6379`, se conectará automáticamente a él.
-> - Si **no** tienes Redis instalado o no usas Docker, el backend levantará un **motor Redis en memoria (`fakeredis`)** de forma transparente, permitiendo que todas las funciones (`HSET`, `HGETALL`, `HDEL`) operen al 100% sin configuraciones adicionales.
+El script verifica tres identificadores distintos de web y API, crea un producto
+temporal y comprueba que las replicas compartan sus cambios. Luego detiene
+`frontend` y `backend`, verifica que las otras dos replicas de cada servicio
+respondan y repite las operaciones de crear, completar, consultar y eliminar.
+Finalmente restaura los contenedores, incluso si falla la prueba, y verifica
+que vuelvan a responder tres nodos. Solo elimina el producto temporal de prueba.
+
+Para una demostracion manual:
+
+```powershell
+docker compose ps
+docker compose stop frontend backend
+# Usar la web y comprobar que todavia permite operar.
+docker compose start --wait frontend backend
+```
+
+En las herramientas del navegador, pestana Network, las cabeceras de respuesta
+`X-Web-Node` y `X-API-Node` identifican el contenedor que atendio la solicitud.
+`X-Upstream-Addr` muestra las direcciones que intento contactar el proxy.
+Tambien se pueden consultar desde PowerShell:
+
+```powershell
+1..9 | ForEach-Object {
+    (Invoke-WebRequest -UseBasicParsing http://localhost:8080/).Headers['X-Web-Node']
+    (Invoke-WebRequest -UseBasicParsing http://localhost:8080/api/health).Headers['X-API-Node']
+}
+```
+
+La tolerancia cubre la caida de replicas de web/API; el proxy y Redis siguen
+siendo instancias unicas. Una peticion que ya estaba en curso durante la caida
+puede fallar. No se fuerzan reintentos de POST que ya fueron enviados, para
+no duplicar productos. Los nodos recuperados se reincorporan tras el intervalo
+de deteccion (unos segundos). El proxy actualiza las IP usando el DNS de Docker
+si se recrean los contenedores.
+
+Referencias: [balanceo Nginx](https://nginx.org/en/docs/http/load_balancing.html)
+y [reintentos del proxy](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream).
+
+Para detener el conjunto conservando los datos: `docker compose down`.
+No agregar `-v` si se desea conservar el volumen de Redis.
+
+### Comportamiento cuando no hay API disponible
+
+La web no guarda ni recupera productos desde `localStorage`. Si todas las API
+dejan de responder, conserva en memoria la última lista confirmada y muestra
+un aviso de datos posiblemente desactualizados. Agregar, completar, eliminar
+y limpiar comprados quedan deshabilitados. Si se recarga la página durante
+la caída, se muestra que no se pudo cargar la lista.
+
+La conexión se comprueba cada cinco segundos, con un timeout por solicitud de
+ocho segundos. Al recuperarse, se consulta la lista desde la API antes de
+habilitar las modificaciones. Las operaciones solo se reflejan cuando la API
+las confirma; si se pierde una respuesta, la recuperación vuelve a consultar
+el estado real, sin reintentar automáticamente escrituras.
+
+Los tests del frontend se ejecutan con `node --test tests/test_frontend.cjs`
+y también forman parte del job de tests en GitHub Actions.
 
 ---
-
-### 4. Iniciar la Aplicación Web (Frontend)
-
-Tienes dos opciones para abrir la web:
-
-- **Opción A (Recomendada con servidor local)**:
-  Abre una **segunda terminal** en la carpeta raíz del proyecto y ejecuta:
-  ```powershell
-  python -m http.server 8080
-  ```
-  Luego abre en tu navegador: [http://localhost:8080/index.html](http://localhost:8080/index.html)
-
-- **Opción B (Directa)**:  
-  Haz doble clic en el archivo `index.html` para abrirlo directamente en tu navegador favorito.
-
----
-
-## 🔌 Endpoints de la API Backend (`http://localhost:8000`)
+## 🔌 Endpoints de la API Backend (`http://localhost:8080`)
 
 | Método | Endpoint | Descripción | Operación en Redis |
 | :--- | :--- | :--- | :--- |
@@ -100,7 +144,7 @@ Tienes dos opciones para abrir la web:
 
 ### 📖 Documentación Interactiva (Swagger UI)
 Con el backend en ejecución, puedes explorar, probar y ejecutar todas las llamadas a la API interactivamente ingresando a:
-👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
+👉 **[http://localhost:8080/docs](http://localhost:8080/docs)**
 
 ---
 
@@ -156,12 +200,40 @@ junto al badge CI si una ejecución fue cancelada o falló la publicación.
 Al integrar en `main`, cambiar `branch=actions`, `branch%3Aactions` y `actions.json`
 en los enlaces superiores por sus equivalentes de `main`.
 
+### Análisis de código con SonarCloud
+
+Además de Bandit, el workflow corre un job `sonarcloud` que envía cobertura de
+tests y análisis estático (bugs, code smells, vulnerabilidades, duplicación)
+a [SonarCloud](https://sonarcloud.io), gratuito para repos públicos. Cubre
+tanto `backend` (Python) como `js` (JavaScript del frontend).
+
+Para activarlo, alguien del grupo con acceso admin al repo debe:
+
+1. Entrar a [sonarcloud.io](https://sonarcloud.io) e iniciar sesión con la
+   cuenta de GitHub del repositorio (u organización).
+2. Importar el repositorio `miguet22/TPI1_DEVOPS` como nuevo proyecto.
+3. Verificar que el "Organization Key" y el "Project Key" coincidan con los
+   configurados en [`sonar-project.properties`](sonar-project.properties)
+   (`sonar.organization` y `sonar.projectKey`); si SonarCloud asigna otros
+   valores, actualizar ese archivo para que coincidan.
+4. En SonarCloud: **My Account → Security** (o en el proyecto, **Administration
+   → Analysis Method**), generar un token.
+5. En GitHub: **Settings → Secrets and variables → Actions → New repository
+   secret**, crear `SONAR_TOKEN` con ese valor.
+6. Desactivar "Automatic Analysis" en la configuración del proyecto en
+   SonarCloud (Administration → Analysis Method), porque el análisis lo
+   dispara el workflow de GitHub Actions, no SonarCloud directamente.
+
+Una vez configurado, cada push o PR corre el análisis y actualiza el Quality
+Gate. El badge de arriba refleja el resultado del último análisis en la rama
+por defecto de SonarCloud.
+
 Para repetir las comprobaciones desde la raíz del repositorio:
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m pytest -q --junitxml=reports/tests.xml
 New-Item -ItemType Directory -Force reports | Out-Null
+python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:reports/coverage.xml
 python -m bandit -r backend -f json -o reports/bandit.json --exit-zero
 python scripts/sast_rating.py reports/bandit.json reports/sast.json
 ```
@@ -217,3 +289,27 @@ El sistema incluye un **Visor de Variables en Tiempo Real** para inspeccionar la
 - 🖥️ **En la Interfaz Web**: Presiona el botón **"⚡ Visor Redis"** en la barra superior de la aplicación para abrir el modal interactivo con el estado del servidor, claves activas, tipos de datos y los registros JSON en `superlist:items`.
 - 🔌 **Vía API REST**: Endpoint `GET /api/redis/stats` que devuelve en formato JSON las métricas, claves y campos del hash.
 
+### Notificaciones del CI en Discord
+
+El job `notify-discord` espera a los tests, Bandit, SonarCloud y la publicación
+del badge. Envía `CI OK` si las comprobaciones finalizan correctamente,
+`CI FALLÓ` si algún job falla o `CI INCOMPLETO` si faltan comprobaciones.
+El mensaje incluye el resultado de cada job, la rama, el commit y un enlace
+a la ejecución. SonarCloud sin token se informa como omitido; el badge también
+puede omitirse en ramas donde no se publica, sin convertir el CI en un fallo.
+
+Para activarlo:
+
+1. En el canal de Discord, abrir **Editar canal → Integraciones → Webhooks**,
+   crear un webhook y copiar su URL.
+2. En el repositorio de GitHub, abrir **Settings → Secrets and variables →
+   Actions → New repository secret**.
+3. Crear el secreto `DISCORD_WEBHOOK_URL` con la URL del webhook como valor.
+4. Subir el workflow y ejecutar el CI mediante un push o **Run workflow**.
+
+No guardar la URL en el código. Si el secreto no está disponible (por ejemplo,
+en PRs desde forks), se omite el envío con un aviso. Las ejecuciones canceladas
+no envían notificación. Un error de Discord se registra como advertencia y no
+cambia el resultado de los controles del CI.
+
+Referencia: [webhooks de Discord](https://docs.discord.com/developers/resources/webhook).
