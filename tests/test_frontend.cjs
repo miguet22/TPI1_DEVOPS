@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '../js/app.js'), 'utf8');
+const appPath = path.resolve(__dirname, '../js/app.js');
+const source = fs.readFileSync(appPath, 'utf8');
 const product = { id: 'test', name: 'Pan', category: 'otros', quantity: '1 un', note: '', completed: false };
 
 function element() {
@@ -41,7 +42,7 @@ function app() {
     localStorage: new Proxy({}, { get() { throw new Error('Storage must not be used'); } }),
     fetch: async () => { throw new Error('offline'); }
   });
-  vm.runInContext(source, context);
+  vm.runInContext(source, context, { filename: appPath });
   return {
     context, get,
     run: code => vm.runInContext(code, context),

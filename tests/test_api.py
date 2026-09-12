@@ -122,3 +122,63 @@ def test_redis_stats_endpoint():
         assert "keys" in data
         assert any(k["key"] == main.REDIS_KEY_ITEMS for k in data["keys"])
 
+
+def test_update_item_all_fields():
+    item = main.create_item(main.ItemCreate(name="Original", category="otros", quantity="1", note="N"))
+    updated = main.update_item(
+        item["id"],
+        main.ItemUpdate(name=" Modificado ", category="lacteos", quantity=" 2 un ", note=" Nueva nota ")
+    )
+    assert updated["name"] == "Modificado"
+    assert updated["category"] == "lacteos"
+    assert updated["quantity"] == "2 un"
+    assert updated["note"] == "Nueva nota"
+
+
+def test_redis_stats_with_string_and_raw_hash(storage):
+    storage.set("simple_string", "test_value")
+    storage.hset("custom_hash", "raw_field", "non_json_value")
+    with TestClient(main.app) as client:
+        res = client.get("/api/redis/stats")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "ok"
+        keys_map = {k["key"]: k for k in data["keys"]}
+        assert "simple_string" in keys_map
+        assert keys_map["simple_string"]["data"] == "test_value"
+        assert "custom_hash" in keys_map
+        assert keys_map["custom_hash"]["data"]["raw_field"] == "non_json_value"
+
+
+def test_redis_stats_error_handling(monkeypatch):
+    mock_client = Mock()
+    mock_client.keys.side_effect = Exception("Redis error")
+    monkeypatch.setattr(main, "_redis_client", mock_client)
+    with TestClient(main.app) as client:
+        res = client.get("/api/redis/stats")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "error"
+        assert "Redis error" in data["error"]
+
+
+@pytest.mark.parametrize("url,expected_mode", [
+    ("redis://user:pass@remote-host:6379", "Servidor Redis (remote-host:6379)"),
+    ("redis://localhost:6379", "Servidor Redis (redis://localhost:6379)"),
+])
+def test_redis_connection_from_url(monkeypatch, url, expected_mode):
+    monkeypatch.setattr(main, "REDIS_URL", url)
+    monkeypatch.setattr(main, "_redis_client", None)
+    real = Mock()
+    monkeypatch.setattr(main.redis, "from_url", Mock(return_value=real))
+    client = main.get_redis_client()
+    assert client is real
+    assert main._redis_mode == expected_mode
+
+
+def test_identify_api_node_middleware():
+    with TestClient(main.app) as client:
+        response = client.get("/api/health")
+        assert "X-API-Node" in response.headers
+
+
