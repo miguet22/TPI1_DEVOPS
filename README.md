@@ -30,7 +30,7 @@ TP1_devops/
 ├── css/
 │   └── styles.css           # Estilos visuales, diseño responsive, glassmorphism y tema oscuro
 ├── js/
-│   └── app.js               # Lógica del cliente, fetch a la API y fallback offline
+│   └── app.js               # Lógica del cliente, API y recuperación de conexión
 ├── index.html               # Interfaz web principal y modal
 ├── .gitignore               # Archivos ignorados por Git
 └── README.md                # Guía de instalación y uso
@@ -112,6 +112,23 @@ y [reintentos del proxy](https://nginx.org/en/docs/http/ngx_http_proxy_module.ht
 
 Para detener el conjunto conservando los datos: `docker compose down`.
 No agregar `-v` si se desea conservar el volumen de Redis.
+
+### Comportamiento cuando no hay API disponible
+
+La web no guarda ni recupera productos desde `localStorage`. Si todas las API
+dejan de responder, conserva en memoria la última lista confirmada y muestra
+un aviso de datos posiblemente desactualizados. Agregar, completar, eliminar
+y limpiar comprados quedan deshabilitados. Si se recarga la página durante
+la caída, se muestra que no se pudo cargar la lista.
+
+La conexión se comprueba cada cinco segundos, con un timeout por solicitud de
+ocho segundos. Al recuperarse, se consulta la lista desde la API antes de
+habilitar las modificaciones. Las operaciones solo se reflejan cuando la API
+las confirma; si se pierde una respuesta, la recuperación vuelve a consultar
+el estado real, sin reintentar automáticamente escrituras.
+
+Los tests del frontend se ejecutan con `node --test tests/test_frontend.cjs`
+y también forman parte del job de tests en GitHub Actions.
 
 ---
 ## 🔌 Endpoints de la API Backend (`http://localhost:8080`)

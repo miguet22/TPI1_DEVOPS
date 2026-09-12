@@ -31,6 +31,11 @@ jobs:
             requirements-dev.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pytest -q --junitxml=reports/tests.xml --cov=backend --cov-report=xml:reports/coverage.xml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Tests de disponibilidad del frontend
+        run: node --test tests/test_frontend.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
