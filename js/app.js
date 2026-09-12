@@ -610,7 +610,7 @@ function showToast(message, type = 'info') {
 
 // --- Helper Utilities ---
 function escapeHTML(str) {
-  return str.replace(/[&<>'"]/g, 
+  return String(str ?? '').replace(/[&<>'"]/g, 
     tag => ({
       '&': '&amp;',
       '<': '&lt;',

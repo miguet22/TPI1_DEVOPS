@@ -303,7 +303,7 @@ def get_redis_stats():
             "keys": []
         }
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "127.0.0.1")
