@@ -96,48 +96,6 @@ class Item(BaseModel):
     createdAt: int
 
 # ------------------------------------------------------------------------------
-# Datos iniciales de muestra
-# ------------------------------------------------------------------------------
-DEFAULT_SAMPLE_ITEMS = [
-    {
-        "id": "item-1",
-        "name": "Leche Deslactosada",
-        "category": "lacteos",
-        "quantity": "2 litros",
-        "note": "Marca La Serenísima o similar",
-        "completed": False,
-        "createdAt": int(time.time() * 1000) - 3600000
-    },
-    {
-        "id": "item-2",
-        "name": "Manzanas Rojas",
-        "category": "frutas",
-        "quantity": "1.5 kg",
-        "note": "Que no estén golpeadas",
-        "completed": True,
-        "createdAt": int(time.time() * 1000) - 7200000
-    },
-    {
-        "id": "item-3",
-        "name": "Pan Integral de Molde",
-        "category": "panaderia",
-        "quantity": "1 paquete",
-        "note": "",
-        "completed": False,
-        "createdAt": int(time.time() * 1000) - 1800000
-    },
-    {
-        "id": "item-4",
-        "name": "Detergente para Platos",
-        "category": "limpieza",
-        "quantity": "750 ml",
-        "note": "Aroma limón",
-        "completed": False,
-        "createdAt": int(time.time() * 1000) - 900000
-    }
-]
-
-# ------------------------------------------------------------------------------
 # Endpoints de la API
 # ------------------------------------------------------------------------------
 
@@ -166,12 +124,6 @@ def get_all_items():
     r = get_redis_client()
     raw_items = r.hgetall(REDIS_KEY_ITEMS)
     
-    # Si Redis está vacío la primera vez, sembramos los ejemplos iniciales
-    if not raw_items:
-        for sample in DEFAULT_SAMPLE_ITEMS:
-            r.hset(REDIS_KEY_ITEMS, sample["id"], json.dumps(sample))
-        raw_items = r.hgetall(REDIS_KEY_ITEMS)
-
     items_list = []
     for _, json_val in raw_items.items():
         try:

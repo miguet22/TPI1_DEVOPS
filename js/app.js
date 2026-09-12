@@ -21,46 +21,6 @@ const CATEGORIES = {
   otros: { label: 'Otros', emoji: '📦' }
 };
 
-// Initial Fallback Data
-const DEFAULT_ITEMS = [
-  {
-    id: 'item-1',
-    name: 'Leche Deslactosada',
-    category: 'lacteos',
-    quantity: '2 litros',
-    note: 'Marca La Serenísima o similar',
-    completed: false,
-    createdAt: Date.now() - 3600000
-  },
-  {
-    id: 'item-2',
-    name: 'Manzanas Rojas',
-    category: 'frutas',
-    quantity: '1.5 kg',
-    note: 'Que no estén golpeadas',
-    completed: true,
-    createdAt: Date.now() - 7200000
-  },
-  {
-    id: 'item-3',
-    name: 'Pan Integral de Molde',
-    category: 'panaderia',
-    quantity: '1 paquete',
-    note: '',
-    completed: false,
-    createdAt: Date.now() - 1800000
-  },
-  {
-    id: 'item-4',
-    name: 'Detergente para Platos',
-    category: 'limpieza',
-    quantity: '750 ml',
-    note: 'Aroma limón',
-    completed: false,
-    createdAt: Date.now() - 900000
-  }
-];
-
 // App State
 let items = [];
 let currentFilter = 'all'; // 'all' | 'pending' | 'completed'
@@ -167,12 +127,12 @@ async function loadItems() {
   const saved = localStorage.getItem('superlist_items');
   if (saved) {
     try {
-      items = JSON.parse(saved);
+      items = JSON.parse(saved).filter(item => !['item-1', 'item-2', 'item-3', 'item-4'].includes(item.id));
     } catch (e) {
-      items = [...DEFAULT_ITEMS];
+      items = [];
     }
   } else {
-    items = [...DEFAULT_ITEMS];
+    items = [];
     saveLocalBackup();
   }
   render();
