@@ -26,6 +26,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    depends_on:
+      backend:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
       interval: 5s
