@@ -139,42 +139,43 @@ python -m bandit -r backend
 
 Después de los tests y del SAST, el job `publish-docker` construye y publica las imágenes del frontend y del backend. Para habilitarlo se configuran estos secretos en GitHub Actions:
 
-- `DOCKERHUB_USERNAME`: usuario de Docker Hub.
+- `DOCKERHUB_USERNAME`: usuario de Docker Hub (`cazm0`).
 - `DOCKERHUB_TOKEN`: token de acceso con permiso de escritura.
 
-Las imágenes se etiquetan como:
+Las imágenes se publican en los repositorios:
+
+- **Frontend:** [hub.docker.com/r/cazm0/superlist-frontend](https://hub.docker.com/r/cazm0/superlist-frontend)
+- **Backend:** [hub.docker.com/r/cazm0/superlist-backend](https://hub.docker.com/r/cazm0/superlist-backend)
+
+Se etiquetan como:
 
 ```text
-<usuario>/superlist-frontend:latest
-<usuario>/superlist-frontend:<sha-del-commit>
-<usuario>/superlist-backend:latest
-<usuario>/superlist-backend:<sha-del-commit>
+cazm0/superlist-frontend:latest
+cazm0/superlist-frontend:<sha-del-commit>
+cazm0/superlist-backend:latest
+cazm0/superlist-backend:<sha-del-commit>
 ```
 
 La etiqueta con el SHA permite saber exactamente qué versión se publicó. En pull requests se ejecutan los controles, pero no se publican imágenes.
 
 ## Despliegue en la nube
 
-La nube debe ejecutar las imágenes publicadas en Docker Hub, como pide la consigna. La configuración admite un frontend, una API y un Redis administrado; las réplicas en cloud quedan como mejora opcional.
+La aplicación está desplegada en Render utilizando las imágenes publicadas en Docker Hub y almacenamiento persistente en Render Key-Value (Redis):
 
-Variables necesarias:
+- **Frontend (Web):** [https://superlist-frontend-latest.onrender.com](https://superlist-frontend-latest.onrender.com)
+- **Backend (API):** [https://superlist-backend-latest.onrender.com](https://superlist-backend-latest.onrender.com)
+- **Documentación API:** [https://superlist-backend-latest.onrender.com/docs](https://superlist-backend-latest.onrender.com/docs)
+- **Base de datos:** Render Key-Value (Redis administrado)
+- **Registro de imágenes:**
+  - Frontend: [cazm0/superlist-frontend](https://hub.docker.com/r/cazm0/superlist-frontend)
+  - Backend: [cazm0/superlist-backend](https://hub.docker.com/r/cazm0/superlist-backend)
+
+Variables configuradas en los servicios:
 
 | Servicio | Variable | Valor |
 | --- | --- | --- |
-| Backend | `REDIS_URL` | URL de conexión entregada por Redis o Upstash |
-| Frontend | `BACKEND_URL` | URL pública del backend, sin barra final |
-
-Los secretos opcionales `RENDER_DEPLOY_HOOK_BACKEND` y `RENDER_DEPLOY_HOOK_FRONTEND` permiten que GitHub Actions solicite un nuevo despliegue en Render después de publicar las imágenes.
-
-Antes de la entrega se deben registrar aquí las URLs que se usarán en el coloquio:
-
-```text
-Frontend: pendiente de completar
-Backend:  pendiente de completar
-Registry: pendiente de completar
-```
-
-La existencia del workflow y de las instrucciones no reemplaza la evidencia pedida por el profesor: las imágenes deben verse en la registry y la aplicación cloud debe responder desde una URL pública.
+| Backend | `REDIS_URL` | URL de conexión interna de Render Key-Value (`redis://...`) |
+| Frontend | `BACKEND_URL` | `https://superlist-backend-latest.onrender.com` |
 
 ## Organización del repositorio
 
