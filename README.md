@@ -113,7 +113,7 @@ El workflow [ci.yml](.github/workflows/ci.yml) se ejecuta con cada push, pull re
 - tests del frontend con el runner de Node.js;
 - cobertura de Python y JavaScript;
 - análisis SAST del backend con Bandit;
-- análisis de Python y JavaScript con SonarCloud cuando está configurado `SONAR_TOKEN`;
+- análisis de Python y JavaScript con SonarCloud y espera del Quality Gate (hasta 300 segundos); `SONAR_TOKEN` es obligatorio en `main` y, si falta, el job falla;
 - publicación del resultado de SAST para el badge;
 - notificación opcional a Discord mediante `DISCORD_WEBHOOK_URL`.
 
@@ -137,7 +137,7 @@ python -m bandit -r backend
 
 ## Imágenes en Docker Hub
 
-Después de los tests y del SAST, el job `publish-docker` construye y publica las imágenes del frontend y del backend. Para habilitarlo se configuran estos secretos en GitHub Actions:
+Solo en pushes o ejecuciones manuales sobre `main`, el job `publish-docker` construye y publica las imágenes del frontend y del backend después de aprobar los tests, el SAST y el Quality Gate de SonarCloud. Si el análisis falla, el Quality Gate es rechazado o vence el tiempo de espera, no se publican imágenes ni se disparan los despliegues. Para habilitarlo se configuran estos secretos en GitHub Actions:
 
 - `DOCKERHUB_USERNAME`: usuario de Docker Hub (`cazm0`).
 - `DOCKERHUB_TOKEN`: token de acceso con permiso de escritura.
@@ -156,7 +156,7 @@ cazm0/superlist-backend:latest
 cazm0/superlist-backend:<sha-del-commit>
 ```
 
-La etiqueta con el SHA permite saber exactamente qué versión se publicó. En pull requests se ejecutan los controles, pero no se publican imágenes.
+La etiqueta con el SHA permite saber exactamente qué versión se publicó. En pull requests y otras ramas se ejecutan los controles, pero no se publican imágenes ni se disparan los hooks de Render. Fuera de `main`, si no está disponible `SONAR_TOKEN`, el análisis de SonarCloud se omite con un aviso.
 
 ## Despliegue en la nube
 

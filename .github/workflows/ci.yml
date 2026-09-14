@@ -47,8 +47,7 @@ jobs:
     name: Analisis de codigo (SonarCloud)
     needs: tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: always() && !cancelled()
+    timeout-minutes: 15
     env:
       SONAR_TOKEN_SET: ${{ secrets.SONAR_TOKEN != '' }}
     steps:
@@ -64,12 +63,21 @@ jobs:
           path: reports
       - uses: SonarSource/sonarqube-scan-action@v4
         if: env.SONAR_TOKEN_SET == 'true'
+        with:
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
       - name: Aviso si falta configurar SONAR_TOKEN
         if: env.SONAR_TOKEN_SET != 'true'
-        run: echo "::warning::SONAR_TOKEN no está configurado como secret del repo; se omite el análisis de SonarCloud. Ver README para configurarlo."
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "::error::Falta SONAR_TOKEN; main requiere aprobar el Quality Gate antes de publicar y desplegar."
+            exit 1
+          fi
+          echo "::warning::SONAR_TOKEN no está configurado; se omite el análisis de SonarCloud."
 
   sast:
     name: SAST Python (Bandit)
@@ -152,8 +160,8 @@ jobs:
 
   publish-docker:
     name: Publicar imágenes en Docker Hub y Deploy
-    needs: [tests, sast]
-    if: github.event_name != 'pull_request'
+    needs: [tests, sast, sonarcloud]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -249,7 +257,7 @@ jobs:
             const names = { tests: 'Tests', sast: 'SAST (Bandit)', sonarcloud: 'SonarCloud', 'publish-rating': 'Badge SAST' };
             const details = Object.entries(jobs).map(([name, job]) => {
               const result = name === 'sonarcloud' && process.env.SONAR_CONFIGURED !== 'true'
-                ? 'Omitido: falta SONAR_TOKEN' : labels[job.result] || job.result;
+                ? `${labels[job.result] || job.result}: falta SONAR_TOKEN` : labels[job.result] || job.result;
               return `${names[name]}: ${result}`;
             }).join('\n');
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
