@@ -36,6 +36,8 @@ jobs:
           node-version: '22'
       - name: Tests de disponibilidad del frontend
         run: node --experimental-test-coverage --test --test-reporter=lcov --test-reporter-destination=reports/lcov.info tests/test_frontend.cjs
+      - name: Tests de verificación del despliegue
+        run: node --test tests/test_deployment.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -163,7 +165,12 @@ jobs:
     needs: [tests, sast, sonarcloud]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    outputs:
+      deployment: ${{ steps.verify.outputs.deployment }}
+    env:
+      FRONTEND_URL: https://superlist-frontend-latest.onrender.com
+      BACKEND_URL: https://superlist-backend-latest.onrender.com
     permissions:
       contents: read
       packages: write
@@ -173,6 +180,16 @@ jobs:
 
       - name: Configurar Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Validar credenciales de publicación
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Faltan credenciales de Docker Hub."
+            exit 1
+          fi
 
       - name: Iniciar sesión en Docker Hub
         if: "${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}"
@@ -193,6 +210,7 @@ jobs:
         with:
           context: ./backend
           file: ./backend/Dockerfile
+          build-args: APP_VERSION=${{ github.sha }}
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/superlist-backend:latest
@@ -207,6 +225,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.frontend
+          build-args: APP_VERSION=${{ github.sha }}
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/superlist-frontend:latest
@@ -218,7 +237,7 @@ jobs:
           RENDER_DEPLOY_HOOK_BACKEND: ${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}
         run: |
           echo "Disparando despliegue de Backend en Render..."
-          curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}"
+          curl --fail --silent --show-error --max-time 30 -X POST "$RENDER_DEPLOY_HOOK_BACKEND" --output /dev/null
 
       - name: Disparar Deploy Hook de Render (Frontend)
         if: "${{ env.RENDER_DEPLOY_HOOK_FRONTEND != '' }}"
@@ -226,11 +245,22 @@ jobs:
           RENDER_DEPLOY_HOOK_FRONTEND: ${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}
         run: |
           echo "Disparando despliegue de Frontend en Render..."
-          curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}"
+          curl --fail --silent --show-error --max-time 30 -X POST "$RENDER_DEPLOY_HOOK_FRONTEND" --output /dev/null
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Confirmar versión desplegada en Render
+        id: verify
+        env:
+          RENDER_DEPLOY_HOOK_BACKEND: ${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}
+          RENDER_DEPLOY_HOOK_FRONTEND: ${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}
+        run: node scripts/verify-deployment.cjs
 
   notify-discord:
     name: Notificar resultado en Discord
-    needs: [tests, sast, sonarcloud, publish-rating]
+    needs: [tests, sast, sonarcloud, publish-rating, publish-docker]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -241,6 +271,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           CI_RESULTS: ${{ toJSON(needs) }}
           SONAR_CONFIGURED: ${{ secrets.SONAR_TOKEN != '' }}
+          DEPLOYMENT: ${{ needs.publish-docker.outputs.deployment }}
         with:
           script: |
             const webhook = process.env.DISCORD_WEBHOOK_URL;
@@ -252,15 +283,28 @@ jobs:
             const failed = Object.values(jobs).some(job => job.result === 'failure');
             const incomplete = ['tests', 'sast', 'sonarcloud'].some(name => jobs[name].result !== 'success')
               || Object.values(jobs).some(job => job.result === 'cancelled');
-            const title = failed ? 'CI FALLÓ' : incomplete ? 'CI INCOMPLETO' : 'CI OK';
+            const deployed = jobs['publish-docker'].result === 'success' && process.env.DEPLOYMENT === 'success';
+            const title = failed ? 'CI / DESPLIEGUE FALLÓ' : incomplete ? 'CI INCOMPLETO' : deployed ? 'DESPLIEGUE EXITOSO EN RENDER' : 'CI OK — SIN DESPLIEGUE CONFIRMADO';
             const labels = { success: 'OK', failure: 'FALLÓ', skipped: 'Omitido', cancelled: 'Cancelado' };
-            const names = { tests: 'Tests', sast: 'SAST (Bandit)', sonarcloud: 'SonarCloud', 'publish-rating': 'Badge SAST' };
+            const names = { tests: 'Tests', sast: 'SAST (Bandit)', sonarcloud: 'SonarCloud', 'publish-rating': 'Badge SAST', 'publish-docker': 'Publicación y despliegue' };
             const details = Object.entries(jobs).map(([name, job]) => {
               const result = name === 'sonarcloud' && process.env.SONAR_CONFIGURED !== 'true'
                 ? `${labels[job.result] || job.result}: falta SONAR_TOKEN` : labels[job.result] || job.result;
               return `${names[name]}: ${result}`;
             }).join('\n');
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const commitSha = context.payload.pull_request?.head?.sha || context.sha;
+            let commitAuthor = context.payload.head_commit?.author?.name || 'No disponible';
+            try {
+              const { data: commit } = await github.rest.repos.getCommit({
+                ...context.repo, ref: commitSha
+              });
+              commitAuthor = commit.author?.login
+                ? `@${commit.author.login}`
+                : commit.commit.author?.name || commitAuthor;
+            } catch {
+              core.warning('No se pudo consultar el autor del commit; se utiliza el dato del evento si está disponible.');
+            }
             const payload = {
               allowed_mentions: { parse: [] },
               embeds: [{
@@ -271,10 +315,18 @@ jobs:
                 fields: [
                   { name: 'Repositorio', value: process.env.GITHUB_REPOSITORY },
                   { name: 'Rama / referencia', value: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME },
-                  { name: 'Commit', value: process.env.GITHUB_SHA.slice(0, 7) }
+                  { name: 'Commit', value: commitSha.slice(0, 7) },
+                  { name: 'Autor del commit', value: commitAuthor.slice(0, 1024) },
+                  { name: 'Ejecutado por', value: `@${process.env.GITHUB_TRIGGERING_ACTOR || context.actor}` }
                 ]
               }]
             };
+            payload.embeds[0].fields.push({
+              name: 'Despliegue en Render',
+              value: deployed
+                ? 'Versión del commit confirmada en frontend y API, con Redis conectado.\n[Aplicación web](https://superlist-frontend-latest.onrender.com)\n[API](https://superlist-backend-latest.onrender.com/api/health)\n[Documentación API](https://superlist-backend-latest.onrender.com/docs)'
+                : 'No se confirmó el despliegue de este commit. Revisar el job Publicación y despliegue en GitHub Actions.'
+            });
             try {
               const url = new URL(webhook);
               url.searchParams.set('wait', 'true');

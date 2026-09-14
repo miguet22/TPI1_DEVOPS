@@ -130,6 +130,7 @@ def health_check():
         is_alive = r.ping()
         return {
             "status": "online",
+            "version": os.getenv("APP_VERSION", "local"),
             "redis_connected": is_alive,
             "redis_mode": _redis_mode,
             "message": "SuperList API operando correctamente con Redis."

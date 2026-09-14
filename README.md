@@ -117,6 +117,10 @@ El workflow [ci.yml](.github/workflows/ci.yml) se ejecuta con cada push, pull re
 - publicación del resultado de SAST para el badge;
 - notificación opcional a Discord mediante `DISCORD_WEBHOOK_URL`.
 
+Discord espera el resultado de publicación y despliegue. Solo anuncia **DESPLIEGUE EXITOSO EN RENDER** cuando verifica, durante un máximo de 10 minutos, que frontend y API sirven el SHA del commit publicado, que la web responde y que la API conecta con Redis real tanto directamente como a través del frontend. El mensaje incluye enlaces a la web, la API y su documentación. Si faltan hooks, falla un control o no aparece la versión esperada, informa que el despliegue no fue confirmado.
+
+Para disparar ambos servicios deben estar configurados `RENDER_DEPLOY_HOOK_BACKEND` y `RENDER_DEPLOY_HOOK_FRONTEND` como secretos de GitHub Actions. Las imágenes reciben `APP_VERSION` durante el build; el frontend expone esa versión en `/version.txt` y la API en `/api/health`.
+
 La valoración propia de Bandit es la siguiente:
 
 | Valoración | Resultado |
