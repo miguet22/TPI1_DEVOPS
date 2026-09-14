@@ -217,12 +217,16 @@ function closeRedisModal() {
 
 async function loadRedisStats() {
   if (!redisKeysContainer) return;
+  const backendNode = document.getElementById('redis-backend-node');
+  if (backendNode) backendNode.textContent = 'Consultando...';
   redisKeysContainer.innerHTML = '<div class="redis-loading">Consultando datos en tiempo real de Redis...</div>';
   
   try {
     const res = await fetch(`${API_BASE_URL}/redis/stats`, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+
+    if (backendNode) backendNode.textContent = res.headers?.get('X-API-Node') || 'No informado';
 
     if (redisModeBadge) redisModeBadge.textContent = data.redis_mode || 'Desconocido';
     if (redisKeysCount) redisKeysCount.textContent = data.total_keys ?? (data.keys ? data.keys.length : 0);
@@ -286,6 +290,7 @@ async function loadRedisStats() {
     redisKeysContainer.innerHTML = html;
   } catch (err) {
     console.warn('Error al cargar stats de Redis:', err);
+    if (backendNode) backendNode.textContent = 'Sin respuesta';
     if (redisModeBadge) redisModeBadge.textContent = 'Modo Local / Desconectado';
     if (redisKeysCount) redisKeysCount.textContent = items.length;
     if (redisMemoryUsed) redisMemoryUsed.textContent = 'LocalStorage';
